@@ -54,6 +54,22 @@ use the same ACF Fourier transform as EISCAT. These individual integrations are
 not the legacy fit's time/range average. The source does not retain model ACFs
 or fitted ion composition, so an exact fitted spectrum is unavailable.
 
+The plasma-line view estimates the absolute Millstone magic constant C from
+included calibration points, without launching reprocessing. The source proxy is
+`p = A0_K (1 + Te/Ti) range_km² / transmitter_W`. The definition is
+`C p = Ne (1 + Te/Ti) / [(1+q)(1+q+Te/Ti)]`, with `q = k² lambda_D²`.
+Thus C has units `W m^-3 K^-1 km^-2` for this chain; receiver gain has already
+been removed from A0. In the small-Debye limit, `Ne = C p`.
+
+`POST millstone/estimate` verifies the exact saved notebook revision and derives
+C from trusted source fits and plasma frequencies. It returns per-point C,
+median C within each fit, the median across independent fits, and scaled MAD
+between fits. That scatter is not total uncertainty; frequency, temperature and
+systematic uncertainties are excluded. One fit cannot establish between-fit
+scatter. Estimation creates no products and changes no active selector. Applying
+C uses the same calculation in the authenticated density-recalculation endpoint.
+Calibrated HDF5 products retain C and its units.
+
 Calibration points save to the existing revisioned calibration service on
 avaruus. Clicking an individual spectral feature adds an excluded point; review
 its inclusion or remove it from any linked plot. The authenticated

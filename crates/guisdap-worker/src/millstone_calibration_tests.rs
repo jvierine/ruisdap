@@ -62,8 +62,37 @@ mod product_tests {
             date: "2024-04-08".into(),
             antenna: "ZENITH".into(),
         };
-        let result = calibrate_density(&s, request()).unwrap();
         let expected = ion_proxy(ne, 2000., 1000., k) / 3500.;
+        let preview = magic_constant_result(&s, &request()).unwrap();
+        assert!((preview["magic_constant"].as_f64().unwrap() / expected - 1.).abs() < 1e-12);
+        assert_eq!(preview["magic_constant_units"], MAGIC_CONSTANT_UNITS);
+        assert_eq!(preview["independent_fit_count"], 1);
+        assert_eq!(preview["point_count"], 1);
+        assert!(preview["between_fit_scatter"].is_null());
+        assert!(!web.join("catalog/millstone-config.json").exists());
+        assert_eq!(std::fs::read(&mf).unwrap(), before);
+        assert_eq!(std::fs::read_dir(web.join("data")).unwrap().count(), 1);
+        let mut stale = request();
+        stale.revision = 2;
+        assert!(magic_constant_result(&s, &stale).is_err());
+        let path = s.calibration_root.join(&key).join("latest.json");
+        let mut duplicate = notebook.clone();
+        duplicate["points"]
+            .as_array_mut()
+            .unwrap()
+            .push(notebook["points"][0].clone());
+        std::fs::write(&path, serde_json::to_vec(&duplicate).unwrap()).unwrap();
+        let repeated = magic_constant_result(&s, &request()).unwrap();
+        assert_eq!(repeated["magic_constant"], preview["magic_constant"]);
+        assert_eq!(repeated["independent_fit_count"], 1);
+        assert!(repeated["between_fit_scatter"].is_null());
+        duplicate["points"][0]["included"] = false.into();
+        duplicate["points"][1]["included"] = false.into();
+        std::fs::write(&path, serde_json::to_vec(&duplicate).unwrap()).unwrap();
+        assert!(magic_constant_result(&s, &request()).is_err());
+        std::fs::write(&path, serde_json::to_vec(&notebook).unwrap()).unwrap();
+        let result = calibrate_density(&s, request()).unwrap();
+        assert_eq!(result["magic_constant"], preview["magic_constant"]);
         assert!((result["gain"].as_f64().unwrap() / expected - 1.).abs() < 1e-12);
         let config: Value = serde_json::from_slice(
             &std::fs::read(web.join("catalog/millstone-config.json")).unwrap(),
@@ -92,6 +121,16 @@ mod product_tests {
                 < 1e-12
         );
         assert_eq!(std::fs::read(mf).unwrap(), before);
+        assert!(
+            (h.dataset("magic_constant")
+                .unwrap()
+                .read_raw::<f64>()
+                .unwrap()[0]
+                / expected
+                - 1.)
+                .abs()
+                < 1e-12
+        );
         assert!(h.group("records/fit/fit").is_ok());
         assert_eq!(
             h.dataset("records/fit/fit/parameters").unwrap().shape(),

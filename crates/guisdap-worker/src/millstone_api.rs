@@ -202,6 +202,10 @@ pub fn router(state: PathBuf, public: PathBuf, calibration_root: PathBuf) -> Rou
         .and_then(|b| serde_json::from_slice(&b).ok())
         .unwrap_or_default();
     Router::new()
+        .route(
+            "/guisdap/api/catalog/millstone/estimate",
+            axum::routing::post(estimate_magic_constant),
+        )
         .route("/guisdap/api/catalog/millstone/plasma/{id}", get(metadata))
         .route(
             "/guisdap/api/catalog/millstone/plasma/{id}/values.f32",

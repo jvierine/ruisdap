@@ -42,8 +42,19 @@ fn atomic_json(path: &std::path::Path, v: &Value) -> anyhow::Result<()> {
     f.persist(path)?;
     Ok(())
 }
-fn calibrate_density(s: &Store, q: CalibrationRequest) -> anyhow::Result<Value> {
-    use sha2::{Digest, Sha256};
+// C multiplies the legacy proxy A0 (1 + Te/Ti) r_km² / Ptx_W.
+// The proxy uses receiver-gain-corrected fitted ACF amplitudes.
+const MAGIC_CONSTANT_UNITS: &str = "W m^-3 K^-1 km^-2";
+struct ReviewedCalibration {
+    source: Vec<u8>,
+    notebook: Vec<u8>,
+    manifest: Value,
+    checked: Vec<Value>,
+    independent: Vec<f64>,
+    gain: f64,
+    standard_error: Option<f64>,
+}
+fn review_calibration(s: &Store, q: &CalibrationRequest) -> anyhow::Result<ReviewedCalibration> {
     anyhow::ensure!(
         q.notebook_key.len() == 64 && q.notebook_key.bytes().all(|v| v.is_ascii_hexdigit()),
         "Invalid notebook key"
@@ -60,7 +71,7 @@ fn calibrate_density(s: &Store, q: CalibrationRequest) -> anyhow::Result<Value> 
         .get(&format!("{}/{}", q.date, q.antenna))
         .ok_or_else(|| anyhow::anyhow!("Unknown dataset"))?;
     let source = std::fs::read(&ds.manifest)?;
-    let mut m: Value = serde_json::from_slice(&source)?;
+    let m: Value = serde_json::from_slice(&source)?;
     let k = 4. * std::f64::consts::PI * m["radar_frequency_hz"].as_f64().unwrap() / 299792458.;
     let fits = m["fits"].as_array().unwrap();
     let mut groups: BTreeMap<String, Vec<f64>> = BTreeMap::new();
@@ -131,6 +142,7 @@ fn calibrate_density(s: &Store, q: CalibrationRequest) -> anyhow::Result<Value> 
             .push(gain);
         let mut checked_point = p.clone();
         checked_point["multiplier"] = gain.into();
+        checked_point["magic_constant"] = gain.into();
         checked_point["plasma_density_m3"] = ne.into();
         checked.push(checked_point);
     }
@@ -144,9 +156,60 @@ fn calibrate_density(s: &Store, q: CalibrationRequest) -> anyhow::Result<Value> 
     } else {
         None
     };
+    Ok(ReviewedCalibration {
+        source,
+        notebook,
+        manifest: m,
+        checked,
+        independent,
+        gain,
+        standard_error: se,
+    })
+}
+fn magic_constant_result(s: &Store, q: &CalibrationRequest) -> anyhow::Result<Value> {
+    let r = review_calibration(s, q)?;
+    let scatter = median(r.independent.iter().map(|v| (v - r.gain).abs()).collect()) * 1.4826;
+    Ok(
+        json!({"magic_constant":r.gain,"magic_constant_units":MAGIC_CONSTANT_UNITS,"revision":q.revision,"independent_fit_count":r.independent.len(),"point_count":r.checked.len(),"between_fit_scatter":if r.independent.len()>1{Some(scatter)}else{None},"points":r.checked,"method":"Median C within each ion fit, then median across independent fits. Scatter is scaled MAD, not total uncertainty.","normalization":"C * A0_K * (1+Te/Ti) * r_km^2 / Ptx_W = Ne * (1+Te/Ti) / [(1+q)(1+q+Te/Ti)], q=k^2 lambda_D^2. A0 has receiver gain removed."}),
+    )
+}
+async fn estimate_magic_constant(
+    State(s): State<Store>,
+    Json(q): Json<CalibrationRequest>,
+) -> Result<Json<Value>, Error> {
+    let result = tokio::task::spawn_blocking(move || magic_constant_result(&s, &q))
+        .await
+        .map_err(fail)?
+        .map_err(fail)?;
+    Ok(Json(result))
+}
+fn calibrate_density(s: &Store, q: CalibrationRequest) -> anyhow::Result<Value> {
+    use sha2::{Digest, Sha256};
+    let ReviewedCalibration {
+        source,
+        notebook,
+        manifest: mut m,
+        checked,
+        independent,
+        gain,
+        standard_error: se,
+    } = review_calibration(s, &q)?;
+    let ds = s
+        .index
+        .datasets
+        .get(&format!("{}/{}", q.date, q.antenna))
+        .unwrap();
+    let k = 4. * std::f64::consts::PI * m["radar_frequency_hz"].as_f64().unwrap() / 299792458.;
     let hash = format!(
         "{:x}",
-        Sha256::digest([source.as_slice(), notebook.as_slice()].concat())
+        Sha256::digest(
+            [
+                source.as_slice(),
+                notebook.as_slice(),
+                b"millstone-magic-constant-v2"
+            ]
+            .concat()
+        )
     );
     let name = format!(
         "millstone-{}-{}-cal-{}",
@@ -232,7 +295,7 @@ fn calibrate_density(s: &Store, q: CalibrationRequest) -> anyhow::Result<Value> 
         m["parameters_url"] = "parameters.f32".into();
         m["parameter_names"][0] = "Ne / m⁻³".into();
         m["density_semantics"] = "plasma_line_calibrated_density".into();
-        m["calibration"] = json!({"gain":gain,"revision":q.revision,"independent_fit_count":independent.len(),"gain_standard_error":se,"density_uncertainty":"Conditional source-amplitude and independent-fit gain error; Ti/Te covariance unavailable","method":"Bohm-Gross plasma density; finite-Debye integrated ion power. Density recomputed with source Ti/Te fixed; no new ACF fit.","sha256":hash});
+        m["calibration"] = json!({"gain":gain,"magic_constant":gain,"magic_constant_units":MAGIC_CONSTANT_UNITS,"revision":q.revision,"independent_fit_count":independent.len(),"gain_standard_error":se,"density_uncertainty":"Conditional source-amplitude and independent-fit gain error; Ti/Te covariance unavailable","method":"Bohm-Gross plasma density; finite-Debye integrated ion power. Density recomputed with source Ti/Te fixed; no new ACF fit.","sha256":hash});
         std::fs::write(
             out.join("parameters.f32"),
             parameters
@@ -260,7 +323,13 @@ fn calibrate_density(s: &Store, q: CalibrationRequest) -> anyhow::Result<Value> 
             .write_raw(&calibrated)?;
         h.new_dataset_builder()
             .with_data(&[gain])
-            .create("calibration_gain")?; // Calibrated fits use the same interchange records as both source adapters.
+            .create("calibration_gain")?;
+        h.new_dataset_builder()
+            .with_data(&[gain])
+            .create("magic_constant")?
+            .new_attr_builder()
+            .with_data(MAGIC_CONSTANT_UNITS)
+            .create("units")?; // Calibrated fits use the same interchange records as both source adapters.
         h.new_attr_builder()
             .with_data("ruisdap-isr-v1")
             .create("schema")?;
@@ -349,7 +418,7 @@ fn calibrate_density(s: &Store, q: CalibrationRequest) -> anyhow::Result<Value> 
     }
     atomic_json(&configuration, &config)?;
     Ok(
-        json!({"gain":gain,"revision":q.revision,"independent_fit_count":independent.len(),"gain_standard_error":se,"density_uncertainty":"Conditional source-amplitude and independent-fit gain error; Ti/Te covariance unavailable","hdf5_url":format!("data/{name}/calibration.h5"),"manifest_url":format!("data/{name}/manifest.json"),"message":"Density recalculated. Source temperatures, velocity and ACF fits retained."}),
+        json!({"gain":gain,"magic_constant":gain,"magic_constant_units":MAGIC_CONSTANT_UNITS,"revision":q.revision,"independent_fit_count":independent.len(),"gain_standard_error":se,"density_uncertainty":"Conditional source-amplitude and independent-fit gain error; Ti/Te covariance unavailable","hdf5_url":format!("data/{name}/calibration.h5"),"manifest_url":format!("data/{name}/manifest.json"),"message":"Density recalculated. Source temperatures, velocity and ACF fits retained."}),
     )
 }
 async fn recalibrate(

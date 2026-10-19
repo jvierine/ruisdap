@@ -1,6 +1,6 @@
 import {instrumentSpec} from './instrument-plot.js';
 import init,{acf_diagnostic} from './pkg/guisdap_web.js';
-import {fieldPanel,curve,iqr} from './scientific-plots.js';
+import {fieldPanel,curve,iqr,setViewportBounds} from './scientific-plots.js';
 import {EISCAT_LIMITS} from './plot-style.js';
 import {mathAsset} from './math-labels.js';
 const el=id=>document.getElementById(id),query=new URLSearchParams(location.search),antenna=query.get('antenna')||'ZENITH',date=query.get('date');
@@ -55,7 +55,11 @@ function fitCalibrationWindow(){
  setTimeWindow([a,b]);
 }
 function sharedWindow(){const f=maps[0],a=f.item.spec.bounds,b=f.viewport.bounds();return [a[0]+(a[1]-a[0])*b[0],a[0]+(a[1]-a[0])*b[2]];}
-function setTimeWindow(bounds){for(const f of allFields){const a=f.item.spec.bounds,v=f.viewport.bounds(),span=a[1]-a[0];f.viewport.reset();f.viewport.zoom_box((bounds[0]-a[0])/span,v[1],(bounds[1]-a[0])/span,v[3]);f.redraw();}drawInstruments();}
+function setTimeWindow(bounds){for(const f of allFields){const a=f.item.spec.bounds,v=f.viewport.bounds(),span=a[1]-a[0];setViewportBounds(f.viewport,[(bounds[0]-a[0])/span,v[1],(bounds[1]-a[0])/span,v[3]]);f.redraw();}drawInstruments();}
+function setDebrisWindow(time,range){
+ if(range&&rawField){const a=rawField.item.spec.bounds,v=rawField.viewport.bounds();setViewportBounds(rawField.viewport,[v[0],(range[0]-a[2])/(a[3]-a[2]),v[2],(range[1]-a[2])/(a[3]-a[2])]);}
+ setTimeWindow(time);
+}
 function drawDebris(){
  const host=el('mh-debris-section');if(!host||!m||!maps.length||!rawField)return;
  host.hidden=activeView!=='ion'||!m.debris_url;if(host.hidden)return;
@@ -69,7 +73,7 @@ function drawDebris(){
   const key=status+':'+Math.floor((x-bounds[0])/dx)+':'+Math.floor((y-lo)/dy);if(bins.has(key))continue;bins.add(key);series[status]?.xy.push(x,y);
  }
  if(Number.isFinite(selectedTime))series.push({xy:[selectedTime-dayStart,lo,selectedTime-dayStart,hi],color:'#986327',radius:0});
- curve('mh-debris',{title:'Space-debris detections',height:260,margins:[160,10,180,58],bounds:[...bounds,lo,hi],xlabel:'Time / UTC',xformat:'utc',ylabel:'Slant range / km',resetViewport:true,series,onView:setTimeWindow,pick:(x,y)=>{chooseRange(y*1000);chooseTime(x+dayStart);},caption:`${visible.toLocaleString()} detections in view · ${m.debris_count.toLocaleString()} in completed integrations. Zoom in to resolve individual detections.`});
+ curve('mh-debris',{title:'Space-debris detections',height:260,margins:[160,10,180,58],bounds:[0,86400,a[2],a[3]],viewBounds:[...bounds,lo,hi],xlabel:'Time / UTC',xformat:'utc',ylabel:'Slant range / km',series,onView:setDebrisWindow,pick:(x,y)=>{chooseRange(y*1000);chooseTime(x+dayStart);},caption:`${visible.toLocaleString()} detections in view · ${m.debris_count.toLocaleString()} in completed integrations. Zoom in to resolve individual detections.`});
  const legend=el('mh-debris-legend');if(!legend.childNodes.length)for(let i=0;i<names.length;i++){const span=document.createElement('span');span.style.color=colors[i];span.style.marginRight='1.2em';span.textContent='● '+names[i];legend.append(span);}
 }
 function drawInstruments(){

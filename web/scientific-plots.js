@@ -1,3 +1,4 @@
+import {setViewportBounds} from './plot-viewport.js';
 import {instrumentSpec} from './instrument-plot.js';
 import {BeataPower} from './beata-power.js';
 import {FieldView,SeriesView,PlotViewport} from './pkg/guisdap_web.js';
@@ -13,6 +14,7 @@ function fitMargins(width,margins){
  const [left,top,right,bottom]=margins;
  return [Math.min(left,Math.max(52,width*160/900)),top,Math.min(right,Math.max(120,width*180/900)),bottom];
 }
+export {setViewportBounds};
 let openColours=null;
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&openColours){openColours.hidden=true;openColours.parentElement.querySelector('.scientific-colour-hit')?.setAttribute('aria-expanded','false');openColours=null;}});
 const clip=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -80,7 +82,7 @@ function syncTime(source){
  for(const target of charts.values()){
   if(target===source||(target.spec.timeGroup||target.box.closest('.parameter-stack'))!==group)continue;
   const v=target.viewport.bounds(),a=target.spec.bounds,span=a[1]-a[0];
-  target.viewport.reset();target.viewport.zoom_box((b[0]-a[0])/span,v[1],(b[1]-a[0])/span,v[3]);target.redraw();
+  setViewportBounds(target.viewport,[(b[0]-a[0])/span,v[1],(b[1]-a[0])/span,v[3]]);target.redraw();
  }
 }
 function visibleBounds(p){const a=p.spec.bounds,b=p.viewport.bounds();return [a[0]+(a[1]-a[0])*b[0],a[0]+(a[1]-a[0])*b[2],a[2]+(a[3]-a[2])*b[1],a[2]+(a[3]-a[2])*b[3]];}
@@ -107,9 +109,14 @@ function draw(p){
 export function curve(id,spec){
  if(spec.instrument_records)spec=instrumentSpec(spec.instrument_records,spec.bounds.slice(0,2),{selected:spec.selected});
  const host=document.getElementById(id);if(!host)return;host.style.position='relative';let p=curves.get(id);
- if(!p){host.replaceChildren();const canvas=document.createElement('canvas');canvas.setAttribute('aria-label',spec.title||id);canvas.className='scientific-curve';host.append(canvas);const note=document.createElement('p');note.className='caption';host.append(note);p={host,canvas,note,view:new SeriesView(canvas),viewport:new PlotViewport(),pending:false};curves.set(id,p);new ResizeObserver(()=>curve(id,p.spec)).observe(host);bindPlotNavigation(canvas,p.viewport,()=>{const a=p.spec.bounds,v=p.viewport.bounds();p.spec.onView?.([a[0]+(a[1]-a[0])*v[0],a[0]+(a[1]-a[0])*v[2]]);curve(id,p.spec);},()=>{const r=p.view.axes_rect();return {x:r[0],y:r[1],width:r[2],height:r[3]};});let down=null,moved=false;canvas.addEventListener('pointerdown',e=>{down=[e.clientX,e.clientY];moved=false;});canvas.addEventListener('pointermove',e=>{if(down&&Math.hypot(e.clientX-down[0],e.clientY-down[1])>4)moved=true;});canvas.addEventListener('click',e=>{if(moved||!p.spec.pick)return;const r=canvas.getBoundingClientRect(),a=p.view.axes_rect(),b=p.spec.bounds,v=p.viewport.bounds(),x=(e.clientX-r.left-a[0])/a[2],y=1-(e.clientY-r.top-a[1])/a[3];p.spec.pick(b[0]+(b[1]-b[0])*(v[0]+x*(v[2]-v[0])),b[2]+(b[3]-b[2])*(v[1]+y*(v[3]-v[1])));});}
+ if(!p){host.replaceChildren();const canvas=document.createElement('canvas');canvas.setAttribute('aria-label',spec.title||id);canvas.className='scientific-curve';host.append(canvas);const note=document.createElement('p');note.className='caption';host.append(note);p={host,canvas,note,view:new SeriesView(canvas),viewport:new PlotViewport(),pending:false};curves.set(id,p);new ResizeObserver(()=>curve(id,p.spec)).observe(host);bindPlotNavigation(canvas,p.viewport,()=>{const a=p.spec.bounds,v=p.viewport.bounds();p.spec.onView?.([a[0]+(a[1]-a[0])*v[0],a[0]+(a[1]-a[0])*v[2]],[a[2]+(a[3]-a[2])*v[1],a[2]+(a[3]-a[2])*v[3]]);curve(id,p.spec);},()=>{const r=p.view.axes_rect();return {x:r[0],y:r[1],width:r[2],height:r[3]};});let down=null,moved=false;canvas.addEventListener('pointerdown',e=>{down=[e.clientX,e.clientY];moved=false;});canvas.addEventListener('pointermove',e=>{if(down&&Math.hypot(e.clientX-down[0],e.clientY-down[1])>4)moved=true;});canvas.addEventListener('click',e=>{if(moved||!p.spec.pick)return;const r=canvas.getBoundingClientRect(),a=p.view.axes_rect(),b=p.spec.bounds,v=p.viewport.bounds(),x=(e.clientX-r.left-a[0])/a[2],y=1-(e.clientY-r.top-a[1])/a[3];p.spec.pick(b[0]+(b[1]-b[0])*(v[0]+x*(v[2]-v[0])),b[2]+(b[3]-b[2])*(v[1]+y*(v[3]-v[1])));});}
  if(/^fit-instrument-/.test(id))spec.margins=[160,32,180,58];
- p.spec=spec;if(spec.resetViewport)p.viewport.reset();p.canvas.style.height=(spec.height||(host.closest('.plasma-profile-pair')?520:300))+'px';if(!host.clientWidth||host.closest('[hidden]')||p.pending)return;p.pending=true;requestAnimationFrame(()=>{p.pending=false;drawCurve(p);});
+ p.spec=spec;if(spec.resetViewport)p.viewport.reset();
+ if(spec.viewBounds){
+  const a=spec.bounds,b=spec.viewBounds,w=a[1]-a[0],h=a[3]-a[2],target=[(b[0]-a[0])/w,(b[2]-a[2])/h,(b[1]-a[0])/w,(b[3]-a[2])/h],current=p.viewport.bounds();
+  if(target.some((v,i)=>Math.abs(v-current[i])>1e-8))setViewportBounds(p.viewport,target);
+ }
+ p.canvas.style.height=(spec.height||(host.closest('.plasma-profile-pair')?520:300))+'px';if(!host.clientWidth||host.closest('[hidden]')||p.pending)return;p.pending=true;requestAnimationFrame(()=>{p.pending=false;drawCurve(p);});
 }
 function drawCurve(p){const spec=p.spec,host=p.host,b=spec.bounds,v=p.viewport.bounds(),bounds=[b[0]+(b[1]-b[0])*v[0],b[0]+(b[1]-b[0])*v[2],b[2]+(b[3]-b[2])*v[1],b[2]+(b[3]-b[2])*v[3]];
  p.view.axes({width:host.clientWidth,height:spec.height||(host.closest('.plasma-profile-pair')?520:300),dpr:devicePixelRatio||1,bounds,...(spec.margins?{margins:fitMargins(host.clientWidth,spec.margins)}:{}),x:{label:mathAsset(spec.xlabel)?'':spec.xlabel||'',format:spec.xformat||''},y:{label:mathAsset(spec.ylabel)?'':spec.ylabel||'',format:spec.yformat||''}});

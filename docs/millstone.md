@@ -227,3 +227,8 @@ It publishes `native-full-20261019` only after all eligible inputs reduce and fi
 successfully. This extends time coverage for the declared recipe, not support
 for other pulse modes or a MISA calibration. Failed processing does not publish
 a partially complete analysis, and the service has no automatic restart.
+
+Explicit `--resume-products` verifies the frozen input SHA256, common-format
+schema and native executable identity before retaining completed products. The
+remaining inputs are distributed by descending CFAR-detection work estimate.
+Resume audits are HDF5; no completed waveform or ACF product is overwritten.

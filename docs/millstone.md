@@ -55,7 +55,7 @@ not the legacy fit's time/range average. The source does not retain model ACFs
 or fitted ion composition, so an exact fitted spectrum is unavailable.
 
 The plasma-line view estimates the absolute Millstone magic constant C from
-included calibration points, without launching reprocessing. The source proxy is
+included calibration points automatically after loading or changing the saved review, without launching reprocessing. New points are included by default; individual exclusions are retained. The source proxy is
 `p = A0_K (1 + Te/Ti) range_km² / transmitter_W`. The definition is
 `C p = Ne (1 + Te/Ti) / [(1+q)(1+q+Te/Ti)]`, with `q = k² lambda_D²`.
 Thus C has units `W m^-3 K^-1 km^-2` for this chain; receiver gain has already
@@ -71,8 +71,10 @@ C uses the same calculation in the authenticated density-recalculation endpoint.
 Calibrated HDF5 products retain C and its units.
 
 Calibration points save to the existing revisioned calibration service on
-avaruus. Clicking an individual spectral feature adds an excluded point; review
-its inclusion or remove it from any linked plot. The authenticated
+avaruus. Clicking an individual spectral feature adds an included point. Untick Use to
+exclude it, or remove it from a linked plot. Numbered, outlined reticles keep
+the echo centre visible. Click a point’s UTC time in the table to locate its
+individual spectrum. The C plot labels the chain-specific units explicitly. The authenticated
 `millstone/calibrate` endpoint recomputes gains from the saved revision and
 trusted source fits. It publishes an immutable `ruisdap-isr-v1` HDF5 product and
 new browser export, retaining the original source. Density uses the finite-Debye

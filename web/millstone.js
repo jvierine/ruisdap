@@ -5,7 +5,7 @@ const clock=t=>new Date(Math.round(t)*1000).toISOString().slice(11,19),json=asyn
 const nearest=(a,x)=>a.reduce((best,v,i)=>Math.abs(v-x)<Math.abs(a[best]-x)?i:best,0);
 const median=a=>{const b=[...a].sort((a,b)=>a-b);return b.length?(b[(b.length-1)>>1]+b[b.length>>1])/2:NaN;};
 let m,root,parameterData,rawData,plasmaData,dayStart,selected=0,selectedTime,selectedRange=0,plasmaIndex=0,points=[],revision=0,key,saveChain=Promise.resolve(),detailRequest=0,detailTimer,plasmaField,individualField,rawField,plasmaRawField,maps=[],profiles=[],lastPlasmaId;
-let magicEstimate=null;let reviewGeneration=0;let saveError=null;let activeView='plasma';const allFields=[];
+let estimateTimer,estimateAbort,estimateRequest=0;let magicEstimate=null;let reviewGeneration=0;let saveError=null;let activeView='plasma';const allFields=[];
 const records=()=>m.plasma_records[plasmaIndex];
 function profileCard(parent,id,title){const card=document.createElement('article');card.className='plot';const heading=document.createElement('h3');heading.textContent=title;heading.className='scientific-heading';card.append(heading);const plot=document.createElement('div');plot.id=id;card.append(plot);el(parent).append(card);return id;}
 function drawProfile(id,values,ranges,{log=false,title='',caption='',errors=null}={}){
@@ -38,27 +38,65 @@ function candidate(){
  const e=1.602176634e-19,me=9.1093837139e-31,eps=8.8541878188e-12,kb=1.380649e-23,k=4*Math.PI*m.radar_frequency_hz/299792458,omega2=(2*Math.PI*frequency)**2-3*k*k*kb*Te/me;
  if(!(omega2>0))throw Error('Thermal correction exceeds the selected frequency squared.');const ne=eps*me*omega2/e**2,q=k*k*eps*kb*Te/(ne*e*e),ratio=Te/Ti,gain=ne*(1+ratio)/((1+q)*(1+q+ratio))/proxy;
  const flags=[];if(q>=.1)flags.push('large Debye correction');if(f.transmitter_w<400e3)flags.push('low transmit power');if(f.system_temperature_k>2000)flags.push('high system temperature');if(f.space_object_count?.[gate]>0)flags.push('space object in fit gate');
- return {id:[...crypto.getRandomValues(new Uint8Array(16))].map(v=>v.toString(16).padStart(2,'0')).join(''),date:m.date,time_unix_s:t,observation_id:source.id,fit_id:f.id,station:m.station,antenna:m.antenna,mode:'lpi-30',frequency_hz:frequency,frequency_standard_error_hz:sigma,range_m:range,gate,plasma_density_m3:ne,k2_debye2:q,multiplier:gain,included:false,flags};
+ return {id:[...crypto.getRandomValues(new Uint8Array(16))].map(v=>v.toString(16).padStart(2,'0')).join(''),date:m.date,time_unix_s:t,observation_id:source.id,fit_id:f.id,station:m.station,antenna:m.antenna,mode:'lpi-30',frequency_hz:frequency,frequency_standard_error_hz:sigma,range_m:range,gate,plasma_density_m3:ne,k2_debye2:q,multiplier:gain,included:true,flags};
 }
 function calculation(){try{const p=candidate();el('mh-calculation').textContent=`Plasma-line Ne ${p.plasma_density_m3.toExponential(3)} m⁻³ · ${(p.range_m/1000).toFixed(1)} km · magic constant C ${p.multiplier.toExponential(4)} W m⁻³ K⁻¹ km⁻²${p.flags.length?' · '+p.flags.join('; '):''}`;}catch(e){el('mh-calculation').textContent=e.message;}}
 function addPoint(){try{const p=candidate();if(points.some(a=>a.observation_id===p.observation_id&&a.gate===p.gate&&Math.abs(a.frequency_hz-p.frequency_hz)<1000))throw Error('This feature is already saved.');points.push(p);saved(true);}catch(e){el('mh-calculation').textContent=e.message;}}
 function removePoint(index){points.splice(index,1);saved(true);}
 function markers(){
- if(!m)return;const marker=(p,i,x,y)=>({x,y,included:p.included,label:`Remove calibration point ${i+1}: ${clock(p.time_unix_s)} UTC, ${(p.frequency_hz/1e6).toFixed(3)} MHz, ${(p.range_m/1000).toFixed(1)} km`,remove:()=>removePoint(i)});
+ if(!m)return;const marker=(p,i,x,y)=>({x,y,number:i+1,included:p.included,label:`Remove calibration point ${i+1}: ${clock(p.time_unix_s)} UTC, ${(p.frequency_hz/1e6).toFixed(3)} MHz, ${(p.range_m/1000).toFixed(1)} km`,remove:()=>removePoint(i)});
  plasmaField?.markers(points.map((p,i)=>marker(p,i,p.time_unix_s-dayStart,p.frequency_hz/1e6)));
  plasmaRawField?.markers(points.map((p,i)=>marker(p,i,p.time_unix_s-dayStart,p.range_m/1000)));
  individualField?.markers(points.flatMap((p,i)=>p.observation_id===records().id?[marker(p,i,p.frequency_hz/1e6,p.range_m/1000)]:[]));
 }
-function saved(persist=false){
+function showCalibrationPoint(point){
+ el('mh-frequency').value=(point.frequency_hz/1e6).toFixed(5);
+ chooseRange(point.range_m);chooseTime(point.time_unix_s,{plasma:true});
+ // Keep a selected point visible even outside the current time window.
+ for(const field of allFields){
+  const b=field.viewport.bounds(),span=field.xe.at(-1)-field.xe[0],x=(point.time_unix_s-dayStart-field.xe[0])/span;
+  if(x>=b[0]&&x<=b[2])continue;
+  const width=b[2]-b[0],lo=clip(x-width/2,0,1-width);
+  field.viewport.reset();field.viewport.zoom_box(lo,b[1],lo+width,b[3]);field.redraw();
+ }
+ el('plasma-individual').scrollIntoView({block:'center'});
+}
+function saved(persist=false,updateEstimate=true){
  if(persist){reviewGeneration++;magicEstimate=null;}
  const table=el('cal-points');table.replaceChildren();const head=document.createElement('tr');for(const label of ['Use','UTC','Frequency / MHz','Range / km','Magic C','']){const th=document.createElement('th');th.textContent=label;head.append(th);}table.append(head);
- for(const [i,p]of points.entries()){const row=document.createElement('tr'),use=document.createElement('input');use.type='checkbox';use.checked=p.included;use.setAttribute('aria-label',`Include calibration point ${i+1}`);use.onchange=()=>{p.included=use.checked;saved(true);};const del=document.createElement('button');del.textContent=`Remove ${i+1}`;del.onclick=()=>removePoint(i);for(const value of [use,clock(p.time_unix_s), (p.frequency_hz/1e6).toFixed(4),(p.range_m/1000).toFixed(1),p.multiplier.toExponential(4),del]){const td=document.createElement('td');if(value instanceof Node)td.append(value);else td.textContent=value;row.append(td);}table.append(row);}
+ for(const [i,p]of points.entries()){const row=document.createElement('tr'),use=document.createElement('input');use.type='checkbox';use.checked=p.included;use.setAttribute('aria-label',`Include calibration point ${i+1}`);use.onchange=()=>{p.included=use.checked;saved(true);};const del=document.createElement('button');del.textContent=`Remove ${i+1}`;del.onclick=()=>removePoint(i);const view=document.createElement('button');view.className='cal-point-time';view.textContent=clock(p.time_unix_s);view.setAttribute('aria-label',`Show calibration point ${i+1}`);view.onclick=()=>showCalibrationPoint(p);for(const value of [use,view, (p.frequency_hz/1e6).toFixed(4),(p.range_m/1000).toFixed(1),p.multiplier.toExponential(4),del]){const td=document.createElement('td');if(value instanceof Node)td.append(value);else td.textContent=value;row.append(td);}table.append(row);}
  const groups=new Map();for(const p of points.filter(p=>p.included)){const a=groups.get(p.fit_id)||[];a.push(p.multiplier);groups.set(p.fit_id,a);}const gains=[...groups.values()].map(median),gain=median(gains);
- el('mh-calibration-summary').textContent=gains.length?`${points.filter(p=>p.included).length} included point${points.filter(p=>p.included).length===1?'':'s'} · ${gains.length} independent ion fit${gains.length===1?'':'s'}.`:'No included calibration points. Tick Use for the points to include.';if(persist)el('mh-magic-constant').textContent=gains.length?'Review changed. Estimate the magic constant again.':'Select plasma-line features and tick Use for the points to include.';
+ el('mh-calibration-summary').textContent=gains.length?`${points.filter(p=>p.included).length} included point${points.filter(p=>p.included).length===1?'':'s'} · ${gains.length} independent ion fit${gains.length===1?'':'s'}.`:'No included calibration points. Tick Use for the points to include.';
  const a=el('mh-export');if(a.dataset.url)URL.revokeObjectURL(a.dataset.url);a.dataset.url=URL.createObjectURL(new Blob([JSON.stringify({schema:'ruisdap-calibration-review-v1',revision,points,magic_constant_units:'W m^-3 K^-1 km^-2',magic_constant_estimate:magicEstimate},null,2)],{type:'application/json'}));a.href=a.dataset.url;
  localStorage.setItem(`ruisdap-millstone-points-${m.date}-${m.antenna}`,JSON.stringify(points));markers();
- el('mh-calibration-gains').hidden=!points.length;const good=points.filter(p=>p.multiplier>0),times=good.map(p=>p.time_unix_s-dayStart),v=good.map(p=>Math.log10(p.multiplier));if(good.length)curve('mh-calibration-gains',{title:'Magic constant C',bounds:[Math.min(...times)-60,Math.max(...times)+60,Math.min(...v)-.15,Math.max(...v)+.15],xlabel:'Time / UTC',xformat:'utc',ylabel:'C',yformat:'log10',series:[{xy:good.flatMap(p=>[p.time_unix_s-dayStart,Math.log10(p.multiplier)]),style:1,radius:4}],caption:'Per-point C previews. The estimate uses source-verified values and groups points sharing an ion fit.'});
+ el('mh-calibration-gains').hidden=!points.length;const good=points.filter(p=>p.multiplier>0),times=good.map(p=>p.time_unix_s-dayStart),v=good.map(p=>Math.log10(p.multiplier));if(good.length)curve('mh-calibration-gains',{title:'Magic constant C',bounds:[Math.min(...times)-60,Math.max(...times)+60,Math.min(...v)-.15,Math.max(...v)+.15],xlabel:'Time / UTC',xformat:'utc',ylabel:'C / (W m⁻³ K⁻¹ km⁻²)',yformat:'log10',series:[... [true,false].map(included=>({xy:good.filter(p=>p.included===included).flatMap(p=>[p.time_unix_s-dayStart,Math.log10(p.multiplier)]),style:included?0:1,radius:4,color:included?'#236b8e':'#758b98'}))],caption:'Per-point C previews. The estimate uses source-verified values and groups points sharing an ion fit.'});
  if(persist){const snapshot=structuredClone(points);saveChain=saveChain.then(async()=>{el('mh-save-status').textContent='Saving calibration…';const r=await fetch(`api/calibrations/${key}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision,points:snapshot})});if(!r.ok)throw Error(`Calibration save ${r.status}; reload before editing if another tab changed this review.`);revision=(await r.json()).revision;saveError=null;el('mh-save-status').textContent=`Saved on avaruus · revision ${revision}`;}).catch(e=>{saveError=e.message;el('mh-save-status').textContent=e.message;});}
+ if(updateEstimate)scheduleEstimate();
+}
+function scheduleEstimate(){
+ clearTimeout(estimateTimer);estimateAbort?.abort();const request=++estimateRequest;
+ magicEstimate=null;
+ if(!points.some(p=>p.included)){el('mh-magic-constant').textContent=points.length?'No included points. Tick Use or choose Include all.':'Select plasma-line features; C is estimated automatically.';return;}
+ el('mh-magic-constant').textContent='Updating magic constant…';
+ estimateTimer=setTimeout(()=>estimateMagicConstant(request),120);
+}
+async function estimateMagicConstant(request){
+ const generation=reviewGeneration,output=el('mh-magic-constant');
+ try{
+  await saveChain;
+  if(request!==estimateRequest||generation!==reviewGeneration)return;
+  if(saveError)throw Error(saveError);
+  const requestedRevision=revision,controller=new AbortController();estimateAbort=controller;
+  const response=await fetch('api/catalog/millstone/estimate',{method:'POST',headers:{'Content-Type':'application/json'},signal:controller.signal,body:JSON.stringify({notebook_key:key,revision:requestedRevision,date:m.date,antenna:m.antenna})});
+  if(!response.ok)throw Error(await response.text());
+  const result=await response.json();
+  if(request!==estimateRequest||generation!==reviewGeneration||revision!==requestedRevision)return;
+  magicEstimate=result;
+  for(const checked of result.points){const index=points.findIndex(p=>p.id===checked.id);if(index>=0)points[index]=checked;}
+  saved(false,false);
+  output.textContent=`C = ${result.magic_constant.toExponential(6)} W m⁻³ K⁻¹ km⁻² · ${result.independent_fit_count} independent ion fit${result.independent_fit_count===1?'':'s'} · ${result.point_count} point${result.point_count===1?'':'s'}${result.between_fit_scatter===null?' · between-fit scatter unavailable with one fit':` · between-fit scatter ${result.between_fit_scatter.toExponential(3)}`}${m.calibration?` · current C ${m.calibration.gain.toExponential(6)}, correction ×${(result.magic_constant/m.calibration.gain).toFixed(4)}`:''}`;
+ }catch(error){if(request===estimateRequest&&error.name!=='AbortError')output.textContent=error.message;}
+ finally{if(request===estimateRequest)estimateAbort=null;}
 }
 async function loadNotebook(){
  const name=`ruisdap-millstone-notebook-${m.date}-${m.antenna}`;key=localStorage.getItem(name);if(!key){key=[...crypto.getRandomValues(new Uint8Array(32))].map(v=>v.toString(16).padStart(2,'0')).join('');localStorage.setItem(name,key);}
@@ -87,7 +125,7 @@ try{
  for(const [id,lo,hi]of [['mh-full-day',0,86400],['mh-eclipse-window',15*3600,21*3600]])el(id).onclick=()=>{for(const f of allFields){f.viewport.reset();f.viewport.zoom_box(clip((lo-f.xe[0])/(f.xe.at(-1)-f.xe[0]),0,1),0,clip((hi-f.xe[0])/(f.xe.at(-1)-f.xe[0]),0,1),1);f.redraw();}};
  for(const f of allFields){f.viewport.zoom_box(clip((15*3600-f.xe[0])/(f.xe.at(-1)-f.xe[0]),0,1),0,clip((21*3600-f.xe[0])/(f.xe.at(-1)-f.xe[0]),0,1),1);f.redraw();}
  el('mh-frequency').oninput=calculation;el('mh-frequency-error').oninput=calculation;el('mh-range').onchange=()=>chooseRange(Number(el('mh-range').value)*1000);el('mh-save').onclick=addPoint;
- el('mh-estimate').onclick=async()=>{const button=el('mh-estimate'),output=el('mh-magic-constant'),generation=reviewGeneration;try{button.disabled=true;await saveChain;if(generation!==reviewGeneration)throw Error('Review changed during estimation. Estimate again.');if(saveError)throw Error(saveError);if(!points.some(p=>p.included))throw Error('Tick Use for at least one calibration point.');const requestedRevision=revision;output.textContent='Estimating C from the saved review…';const r=await fetch('api/catalog/millstone/estimate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({notebook_key:key,revision:requestedRevision,date:m.date,antenna:m.antenna})});if(!r.ok)throw Error(await r.text());const result=await r.json();if(revision!==requestedRevision||reviewGeneration!==generation)throw Error('Review changed during estimation. Estimate again.');magicEstimate=result;for(const checked of result.points){const index=points.findIndex(p=>p.id===checked.id);if(index>=0)points[index]=checked;}saved();output.textContent=`C = ${result.magic_constant.toExponential(6)} W m⁻³ K⁻¹ km⁻² · ${result.independent_fit_count} independent ion fit${result.independent_fit_count===1?'':'s'} · ${result.point_count} point${result.point_count===1?'':'s'}${result.between_fit_scatter===null?' · between-fit scatter unavailable with one fit':` · between-fit scatter ${result.between_fit_scatter.toExponential(3)}`}${m.calibration?` · current C ${m.calibration.gain.toExponential(6)}, correction ×${(result.magic_constant/m.calibration.gain).toFixed(4)}`:''}`;}catch(e){output.textContent=e.message;}finally{button.disabled=false;}};
+ el('mh-include-all').onclick=()=>{if(points.some(p=>!p.included)){for(const p of points)p.included=true;saved(true);}};
  el('mh-recalculate').onclick=async()=>{try{await saveChain;if(saveError)throw Error(saveError);const token=el('mh-processing-key').value.trim();if(!token)throw Error('Enter the processing key under Processing access.');el('mh-recalculate').disabled=true;el('mh-recalculate-status').textContent='Recalculating density from the saved review…';const r=await fetch('api/catalog/millstone/calibrate',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify({notebook_key:key,revision,date:m.date,antenna:m.antenna})});if(!r.ok)throw Error(await r.text());const result=await r.json();el('mh-recalculate-status').textContent=`${result.message} Magic constant C ${result.gain.toExponential(5)} W m⁻³ K⁻¹ km⁻². Reload the dataset to open the new density product.`;const link=document.createElement('a');link.href=result.hdf5_url;link.textContent='Download calibrated HDF5';el('mh-recalculate-status').append(' ',link);const reload=document.createElement('button');reload.textContent='Open recalculated data';reload.onclick=()=>location.reload();el('mh-recalculate-status').append(' ',reload);}catch(e){el('mh-recalculate-status').textContent=e.message;}finally{el('mh-recalculate').disabled=false;}};
  await loadNotebook();chooseRange(300e3);chooseTime(m.plasma_times.find(t=>t>=dayStart+18*3600)||m.fit_times[0],{plasma:true});setView(activeView);
  if(m.calibration)el('mh-density-note').textContent=`Plasma-line calibrated Ne · C ${m.calibration.gain.toExponential(5)} W m⁻³ K⁻¹ km⁻² · revision ${m.calibration.revision}. Source Ti, Te, velocity and their fit remain unchanged. Raw 10 µs lag remains a signed source proxy.`;

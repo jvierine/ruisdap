@@ -27,7 +27,12 @@ canvas{background:#fff}.scientific-field{padding:14px 0}.selected-time{backgroun
 .ion-cursor,.ion-selection,.plot-markers{position:absolute;inset:0;pointer-events:none;z-index:3}
 .fit-selection-cursor{position:absolute;border-left:1px solid #986327;pointer-events:none}.fit-selection-cursor span{position:absolute;left:-5px;width:10px;border-top:2px solid #986327}
 .scientific-cursor{position:absolute;border-left:1px solid #986327;pointer-events:none;z-index:3}
-.cal-marker{position:absolute;transform:translate(-50%,-50%);background:#fff9;color:#986327;border:0;border-radius:50%;font-size:22px;line-height:1;padding:0;pointer-events:auto;cursor:pointer}
+/* Open centre leaves the spectral feature visible; only the hit area is large. */
+.cal-marker,.cal-marker:hover,.cal-marker:active{position:absolute;transform:translate(-50%,-50%);width:24px;height:24px;min-width:0;min-height:0;padding:0;border:0;border-radius:0;background:transparent;box-shadow:none;pointer-events:auto;cursor:pointer;color:#ffc45b}
+.cal-marker::before{content:"";position:absolute;inset:4px;background:linear-gradient(currentColor,currentColor) left center/5px 1px no-repeat,linear-gradient(currentColor,currentColor) right center/5px 1px no-repeat,linear-gradient(currentColor,currentColor) center top/1px 5px no-repeat,linear-gradient(currentColor,currentColor) center bottom/1px 5px no-repeat;filter:drop-shadow(0 0 1px #142d3b);pointer-events:none}
+.cal-marker[data-included=true]{color:#fff}
+.cal-marker:hover::before,.cal-marker:focus-visible::before{filter:drop-shadow(0 0 1px #142d3b) drop-shadow(0 0 1px currentColor)}
+.cal-marker:focus-visible{outline:1px dashed #986327;outline-offset:1px}
 .shared-colour-controls{display:flex;flex-wrap:wrap;gap:20px;align-items:center;margin:0 24px 18px 76px}
 .shared-colour-controls label{display:grid;grid-template-columns:auto minmax(90px,160px) 75px;align-items:center;gap:8px;font-size:12px}.shared-colour-controls input{margin:0}.shared-colour-controls output{font-variant-numeric:tabular-nums}
 .scientific-curve{display:block;width:100%;height:300px;background:white;touch-action:none}.fit-grid{grid-template-columns:repeat(auto-fit,minmax(290px,1fr))}.acf-grid{grid-template-columns:repeat(auto-fit,minmax(340px,1fr))}

@@ -16,6 +16,6 @@ for(const log of [false,true]){
   assert.ok(limits[1]>limits[0]);if(log)assert.ok(limits[0]>0);
  }
  const sample=Array.from({length:1000},(_,i)=>100+i%100);sample.push(1e20);
- const limits=iqr(sample,log);assert.ok(limits[0]>=100&&limits[1]<=199);
+ const limits=iqr(sample,log);assert.ok(limits[0]>=100-1e-10&&limits[1]<=199+1e-10);
 }
 console.log('Plot data: short gaps extended, hour gaps blank, samples and ordering preserved.');

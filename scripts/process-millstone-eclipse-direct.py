@@ -24,11 +24,12 @@ def atomic_json(path,value):
 def bytes_json(h,name,value):h[name]=np.frombuffer(json.dumps(value).encode(),np.uint8)
 
 def audit_day(day,start,kernels):
-    science=[];candidate=[];gaps=[];products=[];rows=[];rejected=[]
+    science=[];candidate=[];gaps=[];products=[];rows=[];rejected=[];calibration_rejected=[]
     original=kernels['binary_sha256']
     for begin in range(start,start+86400,10):
         with h5py.File(day/'audit'/f'{begin}.h5') as h:
             science.append(h['science_pulse_sample'][:]);candidate.append(h['candidate_science_pulse_sample'][:])
+            if 'calibration_rejected_science_pulse_sample' in h:calibration_rejected.extend(h['calibration_rejected_science_pulse_sample'][:].tolist())
             gaps.extend(json.loads(bytes(h['gaps_json'][:])))
             outputs=json.loads(bytes(h['outputs_json'][:]))
         for row in outputs:
@@ -45,9 +46,11 @@ def audit_day(day,start,kernels):
             rows.append(dict(path=str(path),sha256=row['sha256'],kernel_sha256=kernel))
             products.append(str(path))
     science=np.concatenate(science);candidate=np.concatenate(candidate)
+    calibration_rejected=np.sort(np.asarray(calibration_rejected,dtype=np.uint64))
     assert len(np.unique(science))==len(science),'Duplicate science pulse'
     assert len(np.unique(candidate))==len(candidate),'Duplicate candidate pulse'
     assert np.isin(science,candidate).all(),'Science pulse missing from candidate audit'
+    assert len(np.unique(calibration_rejected))==len(calibration_rejected) and np.isin(calibration_rejected,candidate).all() and not len(np.intersect1d(science,calibration_rejected)),'Invalid calibration exclusion census'
     assert products and len(set(products))==len(products),'Missing or duplicated reduced products'
     path=day/'coverage.h5'
     if not path.exists():
@@ -56,6 +59,8 @@ def audit_day(day,start,kernels):
             h['science_pulse_sample']=science;h['candidate_science_pulse_sample']=candidate
             h['excluded_candidate_sample']=np.setdiff1d(candidate,science)
             h['fully_rejected_science_pulse_sample']=np.unique(np.asarray(rejected,dtype=np.uint64))
+            h['calibration_rejected_science_pulse_sample']=calibration_rejected
+            h['readable_science_pulse_sample']=np.sort(np.r_[science,calibration_rejected])
             bytes_json(h,'gaps_json',gaps);bytes_json(h,'products_json',rows)
             h.attrs['fit_kernel_sha256']=kernels.get('fit_kernel_sha256',original)
             h.attrs['input_mode']='original multi-directory DigitalRF; no RF intermediate'
@@ -65,6 +70,7 @@ def audit_day(day,start,kernels):
         with h5py.File(path) as h:
             assert np.array_equal(h['science_pulse_sample'][:],science),'Coverage changed'
             assert json.loads(bytes(h['products_json'][:]))==rows,'Reduced product ledger changed'
+            np.testing.assert_array_equal(h['calibration_rejected_science_pulse_sample'][:] if 'calibration_rejected_science_pulse_sample' in h else [],calibration_rejected)
     return products,science,candidate,rows
 
 def main():
@@ -127,6 +133,10 @@ def main():
                 assert reference.attrs['verified'] and reference.attrs['complete_utc_day'],'Independent full-day pulse coverage is unproven'
                 assert reference.attrs['science_pulse_count']==len(science)
                 assert reference.attrs['candidate_pulse_count']==len(candidate)
+                with h5py.File(day/'coverage.h5') as coverage:
+                    excluded=len(coverage['calibration_rejected_science_pulse_sample']) if 'calibration_rejected_science_pulse_sample' in coverage else 0
+                assert reference.attrs.get('calibration_rejected_science_pulse_count',0)==excluded
+                assert reference.attrs.get('readable_science_pulse_count',len(science))==len(science)+excluded
             status(date+' fitting completed legacy 300 s integration windows on 128 cores')
             run([sys.executable,'scripts/stream-millstone-direct.py','--root',str(a.output),'--date',date,'--workers','128','--drain'],day/'fit.log')
             fits=day/('stream-fits-'+stream.FIT_SERIES);fit_files=sorted(fits.glob('fit-*.h5'));used=[]
@@ -156,6 +166,7 @@ def main():
             manifest.update(analysis_id='native-direct-20261019',analysis_live=False,analysis_complete=True,
                 analysis_label='Rust · direct DigitalRF · 45 lags',analysis_default_window=[start,start+86400],
                 science_pulse_count=len(science),fully_rejected_science_pulse_count=rejected_count,candidate_science_pulse_count=len(candidate),excluded_candidate_count=len(candidate)-len(science),
+                receiver_calibration_rejected_science_pulse_count=excluded,readable_science_pulse_count=len(science)+excluded,
                 kernel_sha256=fit_sha,reduction_kernel_sha256=sorted(set(r['kernel_sha256'] for r in rows)),
                 input_mode='direct multi-directory DigitalRF',integration_rule='Legacy first-available ACF anchor; source starts strictly below anchor + 300 s; trailing integration retained',
                 analysis_note='Native DigitalRF analysis of all supported powered monostatic ZENITH coded and long pulses available on this day. 45 measured lags and historical range averaging; legacy 300 s maximum integration rule with shorter antenna-selected exposure. Missing RF is audited. Experimental CFAR-seeded amplitude subtraction; background-contaminated pulses are explicitly rejected. Finite-response, finite-Debye Rust fits; initial calibration transfers the reviewed April 8 reference. Physical velocity sign remains unverified.')

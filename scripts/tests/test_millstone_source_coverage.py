@@ -1,4 +1,5 @@
 import importlib.util
+import copy
 import pathlib
 import subprocess
 import sys
@@ -16,6 +17,30 @@ spec.loader.exec_module(module)
 
 
 class IndependentCoverage(unittest.TestCase):
+    def test_bad_gain_exclusion_requires_original_negative_calibration(self):
+        n=10000;omega=2*np.pi*10000/1e6;half=100
+        j=np.arange(2*half);m=j-half+1e-6
+        fir=(.5-.5*np.cos(2*np.pi*j/(2*half-1)))*np.sin(2*np.pi*21600/1e6*m)/(np.pi*m);fir/=fir.sum()
+        response=abs(np.sum(fir*np.exp(1j*omega*(half-j))))**2
+        keys=list(range(18))
+        gap=dict(reason='invalid_receiver_gain',mode='alternating-code-16',pulse_samples=keys,
+                 science_pulse_samples=keys,calibration_pulse_samples=keys,noise_power=4*response,
+                 injection_power=response,receiver_gain=-3*response/1200,injection_temperature_k=1200,
+                 configuration=dict(mode='alternating-code-16',cancel_debris=True,injection_temperature_k=1200,
+                     instrument_metadata={'dc_offset':[0.,0.]},cancellation={'interpolation_half':16},
+                     lpi=dict(sample_rate_hz=1e6,filter_half=100,passband_hz=18000,science_pulse=[True]*len(keys),
+                              noise_gate=[7700,8200],injection_gate=[8400,8850],tx_gate=[76,624])),
+                 cancellation_diagnostics=[dict(reason='no_detections',detections=[],amplitudes=[]) for _ in keys])
+        class OriginalRF:
+            def __init__(self,injection=1.):
+                self.raw=2*np.exp(1j*omega*np.arange(n));self.raw[8300:9000]*=injection/2
+            def read_vector(self,key,length,channel):
+                self.assertions=(length,channel);return self.raw.copy()
+        np.testing.assert_array_equal(module.verify_calibration_exclusion(gap,OriginalRF()),keys)
+        with self.assertRaises(AssertionError):module.verify_calibration_exclusion(gap,OriginalRF(3.))
+        changed=copy.deepcopy(gap);changed['calibration_pulse_samples']=keys[1:]
+        with self.assertRaisesRegex(AssertionError,'silently omitted'):module.verify_calibration_exclusion(changed,OriginalRF())
+
     def test_whole_vectors_and_internal_gaps_are_required(self):
         keys = np.array([100, 110, 120, 130, 140, 150], np.uint64)
         np.testing.assert_array_equal(module.covered(keys, {100: 25, 140: 20}, length=10),

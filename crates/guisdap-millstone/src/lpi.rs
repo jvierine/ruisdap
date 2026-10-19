@@ -55,6 +55,20 @@ pub struct Estimate {
     pub receiver_gain: f64,
     pub system_temperature_k: f64,
 }
+/// Recorded calibration failure, distinguishable from a numerical/layout error.
+#[derive(Debug)]
+pub struct InvalidReceiverGain {
+    pub noise_power: f64,
+    pub injection_power: f64,
+    pub injection_temperature_k: f64,
+    pub receiver_gain: f64,
+}
+impl std::fmt::Display for InvalidReceiverGain {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "noise injection does not establish positive receiver gain (noise={}, injection={}, gain={})", self.noise_power, self.injection_power, self.receiver_gain)
+    }
+}
+impl std::error::Error for InvalidReceiverGain {}
 /// Column-scaled Hermitian WLS. Exactly unconstrained columns remain NaN;
 /// non-positive-definite systems fail rather than silently regularizing.
 pub fn solve(
@@ -124,6 +138,7 @@ fn mean_power(z: &[C], window: [usize; 2], dc: C) -> f64 {
         / (window[1] - window[0]) as f64
 }
 fn receiver_calibration(pulses:&[Pulse],filtered:&[Vec<C>],s:&Settings,injection_temperature_k:f64)->Result<(f64,f64,f64)>{
+    ensure!(injection_temperature_k.is_finite() && injection_temperature_k>0.,"invalid noise-injection temperature");
     // Fully rejected pulses cannot calibrate the remaining science samples.
     let calibration:Vec<_>=filtered.iter().zip(pulses).filter(|(_,p)|p.usable.iter().any(|&x|x)).map(|(z,_)|z).collect();
     ensure!(!calibration.is_empty(),"no usable receiver calibration pulses");
@@ -153,10 +168,9 @@ fn receiver_calibration(pulses:&[Pulse],filtered:&[Vec<C>],s:&Settings,injection
         0.5,
     );
     let gain = (injection - noise) / injection_temperature_k;
-    ensure!(
-        gain.is_finite() && gain > 0.,
-        "noise injection does not establish positive receiver gain"
-    );
+    if !gain.is_finite() || gain <= 0. {
+        return Err(InvalidReceiverGain {noise_power:noise,injection_power:injection,injection_temperature_k,receiver_gain:gain}.into());
+    }
     Ok((noise,injection,gain))
 }
 pub fn estimate(pulses: &[Pulse], s: &Settings, injection_temperature_k: f64) -> Result<Estimate> {
@@ -413,6 +427,17 @@ mod tests {
         for i in 0..56{let a=if i<16{1.}else{1e9};filtered.push(vec![C::new(-a,0.),C::new(a,0.),C::new(-5f64.sqrt()*a,0.),C::new(5f64.sqrt()*a,0.)]);pulses.push(Pulse{echo:vec![],transmit:vec![],pair:0,usable:vec![i<16;4]});}
         let(noise,injection,gain)=receiver_calibration(&pulses,&filtered,&s,2.).unwrap();assert!((noise-1.).abs()<1e-14);assert!((injection-5.).abs()<1e-14);assert!((gain-2.).abs()<1e-14);
         for p in &mut pulses{p.usable.fill(false);}assert!(receiver_calibration(&pulses,&filtered,&s,2.).is_err());
+    }
+    #[test]
+    fn invalid_gain_retains_measurements_as_a_typed_quality_failure(){
+        let s:Settings=serde_json::from_value(serde_json::json!({"sample_rate_hz":1.,"decimation":1,"lag_samples":[1],"range_start":0,"range_end":1,"measurement_start":0,"measurement_end":1,"tx_gate":[0,1],"echo_gate":[0,4],"noise_gate":[0,2],"injection_gate":[2,4],"filter_half":1,"passband_hz":0.1})).unwrap();
+        let filtered=vec![vec![C::new(-2.,0.),C::new(2.,0.),C::new(-1.,0.),C::new(1.,0.)]];
+        let pulses=vec![Pulse{echo:vec![],transmit:vec![],pair:0,usable:vec![true;4]}];
+        let error=receiver_calibration(&pulses,&filtered,&s,2.).unwrap_err();
+        let q=error.downcast_ref::<InvalidReceiverGain>().expect("calibration quality error");
+        assert_eq!((q.noise_power,q.injection_power,q.receiver_gain),(4.,1.,-1.5));
+        let error=receiver_calibration(&pulses,&filtered,&s,0.).unwrap_err();
+        assert!(error.downcast_ref::<InvalidReceiverGain>().is_none(),"a bad configuration must still fail");
     }
 
 }

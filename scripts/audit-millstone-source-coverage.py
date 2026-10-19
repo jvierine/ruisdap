@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Independently verify eligible pulses using upstream DigitalRF/Metadata.
 
-Reads original metadata and RF block indices only. Writes an HDF5 coverage
+Reads original metadata and RF block indices. Explicit receiver-calibration
+exclusions are replayed from original RF in memory. Writes an HDF5 coverage
 ledger, never RF, converted samples, or a combined recording directory.
 """
 import argparse
 import datetime as dt
 import hashlib
+import importlib.util
 import json
 import pathlib
 import time
@@ -62,6 +64,73 @@ def paired_science(keys, codes, begin, end):
     return selected if len(selected) >= 16 else np.empty(0, dtype=np.uint64)
 
 
+def verify_calibration_exclusion(gap, rf):
+    """Independently replay the failed calibration from original RF in memory."""
+    assert gap['reason'] == 'invalid_receiver_gain'
+    c = gap['configuration']
+    assert c['mode'] == gap['mode'] and c['mode'] in ['alternating-code-16', 'long-pulse-480us']
+    s = c['lpi']
+    assert s['sample_rate_hz'] == 1e6 and s['filter_half'] == 100 and s['passband_hz'] == 18000
+    keys = list(map(int, gap['pulse_samples']))
+    qa = gap['cancellation_diagnostics']
+    if not c['cancel_debris']:
+        assert not qa
+        qa = [dict(detections=[], amplitudes=[], reason='disabled') for _ in keys]
+    assert len(keys) == len(qa) == len(s['science_pulse'])
+    expected = np.array([k for k, science in zip(keys, s['science_pulse']) if science], np.uint64)
+    np.testing.assert_array_equal(expected, gap['science_pulse_samples'])
+    calibration = set(map(int, gap['calibration_pulse_samples']))
+    assert len(calibration) >= 16 and calibration <= set(keys)
+    assert gap['injection_temperature_k'] == c['injection_temperature_k'] > 0
+    path = pathlib.Path(__file__).with_name('check-millstone-residual-cfar.py')
+    spec = importlib.util.spec_from_file_location('calibration_reconstruction', path)
+    reconstruction = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(reconstruction)
+    half = s['filter_half']
+    j = np.arange(2*half)
+    m = j-half+1e-6
+    fir = (.5-.5*np.cos(2*np.pi*j/(2*half-1)))*np.sin(2*np.pi*1.2*s['passband_hz']/s['sample_rate_hz']*m)/(np.pi*m)
+    fir /= fir.sum()
+    filtered = []
+    expected_calibration = set()
+    for key, diagnostic in zip(keys, qa):
+        raw = np.asarray(rf.read_vector(key, 10000, 'zenith-l')).reshape(-1)
+        assert len(raw) == 10000
+        if diagnostic['reason'] in ['invalid_background_noise', 'background_gate_contaminated']:
+            dc = complex(*c['instrument_metadata']['dc_offset'])
+            y = raw-dc
+            lo, hi = s['noise_gate']
+            if diagnostic['reason'] == 'invalid_background_noise':
+                bg = y[lo:hi]
+                power = np.median(abs(bg-(np.median(bg.real)+1j*np.median(bg.imag)))**2)/np.log(2)
+                assert not np.isfinite(power) or power <= 0, 'Excluded background is actually valid'
+            else:
+                tx = np.zeros(len(y), complex)
+                tx[s['tx_gate'][0]:s['tx_gate'][1]] = y[s['tx_gate'][0]:s['tx_gate'][1]]
+                contaminated = False
+                for v in diagnostic['detections']:
+                    t = reconstruction.template(tx, v['delay_samples'], v['doppler_hz'], s['sample_rate_hz'], c['cancellation']['interpolation_half'])
+                    contaminated |= np.any(abs(t[lo:hi]) > abs(t).max()*1e-3)
+                assert contaminated, 'Excluded background is not overlapped by a template'
+            assert key not in calibration
+            continue
+        expected_calibration.add(key)
+        assert key in calibration, 'A valid calibration pulse was silently omitted'
+        clean, _ = reconstruction.reconstruct(raw, c, diagnostic)
+        filtered.append(np.convolve(clean, fir, mode='full')[half:half+len(clean)])
+    assert expected_calibration == calibration
+    quiet = np.asarray([z[s['noise_gate'][0]:s['noise_gate'][1]] for z in filtered])
+    injected = np.asarray([z[s['injection_gate'][0]:s['injection_gate'][1]] for z in filtered])
+    means = quiet.mean(axis=1)
+    dc = np.median(means.real)+1j*np.median(means.imag)
+    noise = np.median(np.mean(abs(quiet-dc)**2, axis=1))
+    injection = np.median(np.mean(abs(injected-dc)**2, axis=1))
+    gain = (injection-noise)/c['injection_temperature_k']
+    assert np.isfinite(gain) and gain <= 0, 'Excluded calibration is actually positive'
+    np.testing.assert_allclose([noise, injection, gain], [gap['noise_power'], gap['injection_power'], gap['receiver_gain']], rtol=1e-9, atol=1e-10)
+    return expected
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--root', type=pathlib.Path, action='append', required=True)
@@ -93,7 +162,7 @@ def main():
     )
     args.report.parent.mkdir(parents=True, exist_ok=True)
     began = time.monotonic()
-    total_candidate = total_science = 0
+    total_candidate = total_science = total_readable = total_calibration_rejected = 0
     with h5py.File(args.report, 'a' if args.resume else 'x') as report:
         if 'roots_json' in report:
             assert json.loads(bytes(report['roots_json'][:])) == list(map(str, args.root))
@@ -105,7 +174,7 @@ def main():
         report.attrs['reference'] = 'digital_rf ' + digital_rf.__version__
         report.attrs['date'] = args.date
         report.attrs['complete_utc_day'] = args.seconds == 86400
-        report.attrs['input_mode'] = 'Original DigitalMetadata and RF continuous-block indices; no RF samples read or written'
+        report.attrs['input_mode'] = 'Original DigitalMetadata and RF continuous-block indices; original RF read only to independently replay explicit calibration exclusions; no RF written'
         report.attrs['selection'] = 'Powered >=400 kW monostatic ZENITH; codes 1..32 or 300; complete 10000-sample RX/TX vectors; real same-code adjacent partner <40 ms; >=16 paired pulses per family in each ten-second window'
         report.attrs['verified'] = False
         for lo in range(start, start + args.seconds, 300):
@@ -116,7 +185,11 @@ def main():
                     g = report[str(window)]
                     assert g.attrs['audit_sha256'] == hashlib.sha256((day/'audit'/f'{window}.h5').read_bytes()).hexdigest(), 'Previously verified audit changed'
                     total_candidate += len(g['expected_candidate_sample'])
-                    total_science += len(g['expected_science_sample'])
+                    count = len(g['expected_science_sample'])
+                    excluded = int(g.attrs.get('calibration_rejected_science_pulse_count', 0))
+                    total_readable += count
+                    total_calibration_rejected += excluded
+                    total_science += count-excluded
                 continue
             ids = read_metadata(streams['id_metadata'], (lo-1)*1000000,
                                 (hi+1)*1000000-1, 'sweepid')
@@ -157,6 +230,14 @@ def main():
                 with h5py.File(path) as audit:
                     observed_candidate = np.sort(audit['candidate_science_pulse_sample'][:])
                     observed_science = np.sort(audit['science_pulse_sample'][:])
+                    rejected = np.sort(audit['calibration_rejected_science_pulse_sample'][:]) if 'calibration_rejected_science_pulse_sample' in audit else np.empty(0, np.uint64)
+                    gaps = json.loads(bytes(audit['gaps_json'][:])) if 'gaps_json' in audit else []
+                independently_rejected = []
+                for gap in gaps:
+                    if gap.get('reason') == 'invalid_receiver_gain':
+                        independently_rejected.extend(verify_calibration_exclusion(gap, rf))
+                np.testing.assert_array_equal(rejected, np.sort(np.asarray(independently_rejected, np.uint64)), err_msg='Unverified calibration exclusion')
+                assert not len(np.intersect1d(observed_science, rejected)), 'Calibrated and rejected pulse sets overlap'
                 if str(window) in report:
                     existing = report[str(window)]
                     if existing.attrs.get('verified', False):
@@ -171,14 +252,19 @@ def main():
                         group[name] = expected
                 group.attrs['audit_sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
                 np.testing.assert_array_equal(observed_candidate, expected_candidate, err_msg=f'{window} candidate pulse coverage differs')
-                np.testing.assert_array_equal(observed_science, expected_science, err_msg=f'{window} selected pulse coverage differs')
+                np.testing.assert_array_equal(np.sort(np.r_[observed_science, rejected]), expected_science, err_msg=f'{window} selected pulse coverage differs')
+                group.attrs['calibration_rejected_science_pulse_count'] = len(rejected)
                 group.attrs['verified'] = True
                 total_candidate += len(expected_candidate)
-                total_science += len(expected_science)
+                total_science += len(observed_science)
+                total_readable += len(expected_science)
+                total_calibration_rejected += len(rejected)
             report.flush()
             print(f'{args.date} verified through {hi-start}s: {total_science} science / {total_candidate} candidates; elapsed {time.monotonic()-began:.1f}s', flush=True)
         report.attrs['candidate_pulse_count'] = total_candidate
         report.attrs['science_pulse_count'] = total_science
+        report.attrs['readable_science_pulse_count'] = total_readable
+        report.attrs['calibration_rejected_science_pulse_count'] = total_calibration_rejected
         report.attrs['verified'] = True
     print('INDEPENDENT COVERAGE VERIFIED', args.report, flush=True)
 

@@ -616,6 +616,7 @@ pub fn run_window(archive: &mut Archive, m: &Manifest, begin: u64) -> Result<()>
     let (observations, mut gaps, candidates) = archive.observations(begin)?;
     let mut outputs = Vec::new();
     let mut science = Vec::new();
+    let mut calibration_rejected_science = Vec::new();
     for p in observations {
         let family = if p.config.mode.starts_with("alternating") {
             "coded"
@@ -638,7 +639,19 @@ pub fn run_window(archive: &mut Archive, m: &Manifest, begin: u64) -> Result<()>
                 gaps.push(json!({"pulse_samples":p.samples,"mode":p.config.mode,"reason":"fewer than sixteen pulses with uncontaminated receiver calibration"}));
                 continue;
             }
-            let fit = lpi::estimate(&pulses, &p.config.lpi, p.config.injection_temperature_k)?;
+            let fit = match lpi::estimate(&pulses, &p.config.lpi, p.config.injection_temperature_k) {
+                Ok(fit)=>fit,
+                Err(error)=>{
+                    if let Some(q)=error.downcast_ref::<lpi::InvalidReceiverGain>() {
+                        let selected:Vec<_>=p.samples.iter().zip(&p.config.lpi.science_pulse).filter(|(_,selected)|**selected).map(|(&k,_)|k).collect();
+                        calibration_rejected_science.extend_from_slice(&selected);
+                        let calibration:Vec<_>=p.samples.iter().zip(&pulses).filter(|(_,pulse)|pulse.usable.iter().any(|&x|x)).map(|(&k,_)|k).collect();
+                        gaps.push(json!({"reason":"invalid_receiver_gain","mode":p.config.mode,"source_sha256":p.hash,"science_pulse_samples":selected,"pulse_samples":p.samples,"calibration_pulse_samples":calibration,"noise_power":q.noise_power,"injection_power":q.injection_power,"receiver_gain":q.receiver_gain,"injection_temperature_k":q.injection_temperature_k,"configuration":p.config,"cancellation_diagnostics":diagnostics}));
+                        continue;
+                    }
+                    return Err(error);
+                }
+            };
             product::write_options(
                 &path,
                 &m.roots[0],
@@ -660,6 +673,8 @@ pub fn run_window(archive: &mut Archive, m: &Manifest, begin: u64) -> Result<()>
             .push(json!({"path":path,"sha256":format!("{:x}",Sha256::digest(fs::read(&path)?)),"kernel_sha256":product_kernel}));
     }
     science.sort_unstable();
+    calibration_rejected_science.sort_unstable();
+    ensure!(calibration_rejected_science.windows(2).all(|w|w[0]!=w[1]) && calibration_rejected_science.iter().all(|k|science.binary_search(k).is_err() && candidates.contains(k)),"invalid receiver-calibration exclusion ledger");
     ensure!(
         science.windows(2).all(|w| w[0] != w[1]),
         "duplicate science pulse"
@@ -674,6 +689,7 @@ pub fn run_window(archive: &mut Archive, m: &Manifest, begin: u64) -> Result<()>
         h.new_dataset_builder()
             .with_data(&science)
             .create("science_pulse_sample")?;
+        h.new_dataset_builder().with_data(&calibration_rejected_science).create("calibration_rejected_science_pulse_sample")?;
         h.new_dataset_builder()
             .with_data(&serde_json::to_vec(&outputs)?)
             .create("outputs_json")?;

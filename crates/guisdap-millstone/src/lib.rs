@@ -6,3 +6,5 @@ pub mod lpi;
 pub mod product;
 pub mod signal;
 pub use num_complex::Complex64 as C;
+
+pub mod archive;

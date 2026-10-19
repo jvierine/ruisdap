@@ -252,13 +252,25 @@ pub fn cancel(
             }
         }
     }
-    ensure!(
-        !support
-            .iter()
-            .enumerate()
-            .any(|(i, s)| *s && (noise_window[0]..noise_window[1]).contains(&i)),
-        "detection overlaps background window"
-    );
+    if support.iter().enumerate().any(|(i,s)|*s&&(noise_window[0]..noise_window[1]).contains(&i)) {
+        // No independent background calibration is available for this pulse.
+        // Keep original voltages and reject it, including receiver-gain use.
+        // Undefined QA ratios are serialized as null, never fabricated values.
+        return Ok(Cancellation {
+            cleaned:y.to_vec(),usable:vec![false;y.len()],
+            diagnostic:Diagnostic {
+                accepted:false,applied:false,confirmed:false,
+                amplitude_snr_db:vec![],amplitude_shrinkage:vec![],
+                reason:"background_gate_contaminated".into(),
+                input_rms_over_noise:f64::NAN,residual_rms_over_noise:f64::NAN,
+                heldout_rms_over_noise:f64::NAN,edge_rms_over_noise:f64::NAN,
+                heldout_coherent_sigma:f64::NAN,input_coherent_sigma:f64::NAN,
+                clip_fraction:y.iter().filter(|z|z.re.abs()>=settings.adc_limit||z.im.abs()>=settings.adc_limit).count()as f64/y.len()as f64,
+                fitted_complex_parameters:0,fitted_samples:0,projection_fraction:0.,
+                amplitudes:vec![],detections:refined,noise_rms:f64::NAN,
+            },
+        });
+    }
     let train: Vec<_> = support
         .iter()
         .enumerate()

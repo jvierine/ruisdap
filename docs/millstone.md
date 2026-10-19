@@ -328,3 +328,113 @@ was 47.25 s including three hours of metadata discovery; this is startup cost,
 not an hourly-worker steady-state cost. A single short-pilot plasma fit took
 134.47 s; the low convergence count is not representative of scientific
 200–300 s integrations.
+
+## Production campaign: direct DigitalRF reads
+
+Use `scripts/process-millstone-eclipse-direct.py`, passing one or more `--root`
+recording directories. The native `process-archive` command reads the original
+DigitalRF files by absolute sample index; no campaign-wide preparation, pulse
+packs, combined RF directory, converted RF or persistent RF cache is used.
+The older packing controllers are historical experiments and must not be used
+for production campaign processing.
+
+`guisdap-digital-rf::Reader` accepts multiple top-level, recording or channel
+directories. It exposes `read_vector(start, length, channel, subchannel)` with
+upstream contiguous-vector length, subchannel squeezing and safe floating-point
+promotion semantics. File cadence is used only to find candidates;
+`rf_data_index` determines the actual stored blocks and gaps. Sample indices
+remain u64 and cadence arithmetic uses u128, including rational sample rates.
+Missing files and indexed gaps do not become zeros. A vector containing a gap
+returns a typed `MissingSamples` error; the campaign audits that pulse, skips it
+and continues with subsequent valid data. Corrupt or unsupported layouts remain
+explicit errors. Local filesystem/NFS DigitalRF 2.x with rational-rate properties
+is supported; network URL transport and pre-rational-rate property layouts are
+not implemented.
+
+HDF5 files remain open in a bounded LRU. Each raw chunk cache is at least the
+uncompressed logical `rf_data` size and at least 64 MiB by default, with hash
+slots sized to avoid chunk-cache thrashing. Campaign workers retain up to 32
+files, keeping both receiver and transmit files warm across a ten-second
+observation. This is an in-memory read/decompression cache, not a disk archive.
+Direct DigitalMetadata reads preserve the last antenna state until the next
+actual event, interpolate nearby recorded power, and use catalogue delay/Doppler
+seeds. The CFAR cancellation and LPI kernels are shared with the validated tests.
+
+MPI workers dynamically claim ten-second windows, so busy satellite passes do
+not leave work permanently assigned to one rank. Only reduced ACFs, variances,
+receiver calibration, cancellation diagnostics, mask intervals and coverage
+audits are written. Atomic per-window HDF5 checkpoints verify output hashes
+before resuming. Fit checkpoints bind both the exact fit manifest and executable
+hash, and verify their reduced source inputs. The original RF is never modified.
+
+Validation compares the native reader to upstream `digital_rf` 2.6.14 across
+compressed synthetic multi-directory/hour boundaries, missing files, real
+Millstone file boundaries and the actual 28-second receive gap. The real
+1,122-science-pulse pilot gives exact ACF, clutter-ACF, variance, retained-row and
+receiver-gain equality with the independently validated operator. A known 35 dB
+real satellite echo remains accepted with a held-out RMS/background ratio 0.957.
+The reader tests also cover indices above 2^53, rational sample rates, incompatible
+properties and sparse compressed reads with cache reuse.
+
+### Incremental fits, legacy timing and debris diagnostics
+
+`stream-millstone-direct.py` fits completed integrations while archive reduction
+continues. The integration algorithm is taken from `fit_lpi.fit_lpifiles`:
+anchor at the first available ACF product and include source starts strictly
+below anchor + 300 seconds. Antenna switching commonly limits ZENITH exposure
+to about 200 seconds. Historical `t1` is the **start** of the last ten-second
+source product, so its common 190-second recorded span represents about 200
+seconds of observations. Native fits record the actual science-pulse extent.
+The last integration is flushed at a day boundary; the old Python loop omitted
+its trailing group. A missing reduction audit blocks the contiguous watermark;
+an explicitly audited missing-RF window does not. This prevents publishing an
+incomplete integration as if it had no further observations.
+
+The live scheduler uses eight lower-priority fit workers on physical cores
+already allocated to the 128-rank reduction. Final draining uses up to 128
+workers. Fits have immutable, per-integration plans and checkpoint hashes;
+per-integration leases prevent duplicate fitting between the live and final
+drivers. Public exports use immutable revision directories and switch the
+manifest atomically after all assets are present. The viewer checks for new
+revisions every 15 seconds while visible, preserves selection and viewport,
+and labels the analysis live until the audited complete day is published.
+No new RF reader or RF staging step is introduced by this scheduler.
+
+The native exporter writes a compact, UTC-relative four-column browser array
+of debris detections: time offset in seconds, slant range in km, status and
+signed Doppler in Hz. Original pulse keys and full diagnostics remain in reduced
+HDF5. Only science pulses are exported, excluding repeated clutter partners.
+The delay is relative to the measured leakage template with the measured
+TX/RX channel timing offset removed. The viewer places the detection panel
+below raw electron density, with identical inner horizontal plot bounds and
+time navigation. It distinguishes confirmed subtractions, weak subtractions,
+failed-validation masks and retained low-SNR candidates. These are CFAR-seeded
+candidates and subtraction quality states, not independent orbit confirmations.
+At broad zoom, one actual event per screen bin and category is drawn; zooming
+reveals the native event coordinates. No observational values are averaged or
+removed from the authoritative HDF5 products.
+
+The first live-fit comparison exposed a high-density initialization failure:
+on the same 301 km ACF in the first April 8 integration, a fixed 1e11 m^-3
+starting density entered a hot-ion local minimum with reduced chi-square about
+50.5. A start near 1e12 m^-3 found a much lower residual near 5.0. Historical-mode
+fits now include density starts profiled from the measured complex amplitude
+through the identical finite receiver/model response. Two amplitude updates
+account approximately for density-dependent Debye response before the full
+nonlinear solve. The checked real-data regression yields reduced chi-square
+5.08 and Ti about 1303 K; its remaining temperature-ratio boundary flag is
+retained. This is evidence of improved initialization, not proof that remaining
+large residuals, lag covariance or composition uncertainty are resolved.
+The fitting-kernel revision is frozen separately from reduction kernels, so
+valid ACF reductions can be reused without repeating RF processing.
+
+Background-gate contamination now rejects the entire affected pulse and omits
+it from receiver noise/injection gain estimation, rather than terminating the
+window. Rejected pulse keys, masks and undefined diagnostics are explicit in
+HDF5; undefined ratios are JSON null. An ordinary coded/long pilot remained
+bitwise identical in ACF, variance, clutter ACF and receiver gain after this
+guard. A previously failing archive window completed with two fully rejected
+pulses. Every reduction kernel is identified in the product/coverage ledger.
+Work counters include their manifest start/end interval, so bounded repairs
+cannot reset the full-day MPI queue. Earlier duplicate claims are rejected by
+output guards; checkpoint reuse verifies immutable product hashes.

@@ -173,13 +173,16 @@ pub fn prepare(p: &Pack) -> Result<(Vec<lpi::Pulse>, Vec<Diagnostic>)> {
     }
     Ok((pulses, diagnostics))
 }
-pub fn write(
+pub fn write(path:&Path,source:&Path,p:&Pack,pulses:&[lpi::Pulse],diagnostics:&[Diagnostic],fit:Option<&lpi::Estimate>)->Result<()> {write_options(path,source,p,pulses,diagnostics,fit,true,None)}
+pub fn write_options(
     path: &Path,
     source: &Path,
     p: &Pack,
     pulses: &[lpi::Pulse],
     diagnostics: &[Diagnostic],
     fit: Option<&lpi::Estimate>,
+    store_voltage:bool,
+    processing_kernel:Option<&str>,
 ) -> Result<()> {
     ensure!(!path.exists(), "output exists; use a new product version");
     let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
@@ -191,6 +194,7 @@ pub fn write(
         h.new_attr_builder()
             .with_data("UTC Unix seconds; half-open [start,end)")
             .create("time_convention")?;
+        if let Some(sha)=processing_kernel{h.new_attr_builder().with_data(sha).create("processing_kernel_sha256")?;}
         h.create_group("calibration")?;
         let sources = h.create_group("sources")?;
         let src = sources.create_group(&p.hash[..20])?;
@@ -200,6 +204,7 @@ pub fn write(
         src.new_attr_builder()
             .with_data(source.to_string_lossy().as_ref())
             .create("path")?;
+        if let Some(kind)=p.config.instrument_metadata["source_hash_kind"].as_str(){src.new_attr_builder().with_data(kind).create("hash_kind")?;}
         let records = h.create_group("records")?;
         let r = records.create_group(&p.hash[..24])?;
         let c = &p.config;
@@ -213,6 +218,9 @@ pub fn write(
             .create("pulse_sample")?;
         let qa = r.create_group("debris")?;
         bytes(&qa, "diagnostics_json", &serde_json::to_vec(diagnostics)?)?;
+        let rejected:Vec<_>=p.samples.iter().zip(pulses).filter(|(_,pulse)|!pulse.usable.iter().any(|&x|x)).map(|(&k,_)|k).collect();
+        qa.new_dataset_builder().with_data(&rejected).create("fully_rejected_pulse_sample")?;
+        if store_voltage {
         let ns = p.echo[0].len();
         let cleaned: Vec<_> = pulses
             .iter()
@@ -235,6 +243,10 @@ pub fn write(
             .shape([pulses.len(), ns])
             .create("usable")?;
         d.write_raw(&mask)?;
+        } else {
+         let mut intervals=Vec::<u64>::new();for(pi,pulse)in pulses.iter().enumerate(){let mut i=0;while i<pulse.usable.len(){if pulse.usable[i]{i+=1;continue;}let start=i;while i<pulse.usable.len()&&!pulse.usable[i]{i+=1;}intervals.extend([pi as u64,start as u64,i as u64]);}}
+         qa.new_dataset::<u64>().shape([intervals.len()/3,3]).create("masked_intervals")?.write_raw(&intervals)?;
+        }
         if let Some(f) = fit {
             let nr = c.lpi.range_end - c.lpi.range_start;
             let nl = c.lpi.lag_samples.len();

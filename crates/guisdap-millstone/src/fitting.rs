@@ -80,7 +80,26 @@ pub fn run(inputs:&[PathBuf],output:&Path,m:&Manifest)->Result<()> {
   let mut best:Option<guisdap_ion::fit::FitResult>=None;let mut best_ions=problem.model.ions.clone();
   let fractions=if m.historical_settings&&r>700000.{vec![0.,0.05,0.15,0.3,0.5]}else{vec![-1.]};
   for fraction in fractions{if fraction>=0.{problem.model.ions=vec![IonSpecies{mass_amu:16.,fraction:1.-fraction},IonSpecies{mass_amu:1.,fraction}];}
-   for start in &starts{if let Ok(f)=problem.solve(*start){if best.as_ref().is_none_or(|b|f.chi_square<b.chi_square){best_ions=problem.model.ions.clone();best=Some(f);}}}
+   let mut trial_starts=starts.clone();
+   if m.historical_settings {
+    // A fixed 1e11 density can enter the hot-ion local minimum for dense
+    // eclipse observations. Profile the measured complex amplitude to seed Ne
+    // through the same finite response, with two density iterations for Debye.
+    for (ti,te) in [(500.,550.),(1200.,1300.),(1000.,2000.)] {
+     let mut seed=PlasmaState{ion_temperature_k:ti,electron_temperature_k:te,..m.initial};
+     for _ in 0..2 {
+      let predicted=problem.predict(seed)?;let mut dot=0.;let mut norm=0.;
+      for (measurement,z) in problem.measurements.iter().zip(predicted) {
+       let wr=1./measurement.sigma[0].powi(2);let wi=1./measurement.sigma[1].powi(2);
+       dot+=measurement.value.re*z.re*wr+measurement.value.im*z.im*wi;
+       norm+=z.re*z.re*wr+z.im*z.im*wi;
+      }
+      if dot>0.&&norm>0.&&dot.is_finite()&&norm.is_finite(){seed.electron_density_m3=(seed.electron_density_m3*dot/norm).clamp(1e7,1e14);}
+     }
+     trial_starts.push(seed);
+    }
+   }
+   for start in &trial_starts{if let Ok(f)=problem.solve(*start){if best.as_ref().is_none_or(|b|f.chi_square<b.chi_square){best_ions=problem.model.ions.clone();best=Some(f);}}}
   }
   problem.model.ions=best_ions.clone();
   let result=best.context("all initializations failed").and_then(|mut f|{problem.model_uncertainty(&mut f)?;if f.status=="converged"{warm=f.plasma;}Ok(f)});
@@ -103,7 +122,7 @@ pub fn run(inputs:&[PathBuf],output:&Path,m:&Manifest)->Result<()> {
  bytes(&fit,"results_json",&serde_json::to_vec(&gates)?)?;
  bytes(&fit,"model_json",&serde_json::to_vec(&model)?)?;
  bytes(&fit,"settings_json",&serde_json::to_vec(&m.settings)?)?;
- bytes(&fit,"assumptions_json",&serde_json::to_vec(&serde_json::json!({"historical_settings":m.historical_settings,"integration_s":m.integration_s,"range_averaging":"historical r^2 spatial weights; propagated diagonal measurement variance; range covariance unavailable","composition":"Holt 32/16 amu below 700 km; profiled O+/H+ grid above 700 km when historical_settings enabled","calibration":gain,"calibration_units":"W m^-3 K^-1 km^-1","transmit_power":"removed per source integration before inverse-variance averaging","response":"native finite FIR squared frequency response; locally homogeneous plasma","uncertainty":"diagonal circular-complex lag variance; calibration, composition and shared-lag covariance excluded","velocity":"R(l)=x(t)conj(x(t+l)); signed baseband spectral velocity; physical toward-away sign unverified"}))?)?;
+ bytes(&fit,"assumptions_json",&serde_json::to_vec(&serde_json::json!({"historical_settings":m.historical_settings,"integration_s":m.integration_s,"range_averaging":"historical r^2 spatial weights; propagated diagonal measurement variance; range covariance unavailable","initialization":"warm starts plus finite-response, data-profiled density starts for historical settings","composition":"Holt 32/16 amu below 700 km; profiled O+/H+ grid above 700 km when historical_settings enabled","calibration":gain,"calibration_units":"W m^-3 K^-1 km^-1","transmit_power":"removed per source integration before inverse-variance averaging","response":"native finite FIR squared frequency response; locally homogeneous plasma","uncertainty":"diagonal circular-complex lag variance; calibration, composition and shared-lag covariance excluded","velocity":"R(l)=x(t)conj(x(t+l)); signed baseband spectral velocity; physical toward-away sign unverified"}))?)?;
  let p:Vec<_>=gates.iter().flat_map(|g|if let Some(f)=&g.result{let p=f.plasma;vec![p.electron_density_m3,p.ion_temperature_k,p.electron_temperature_k,p.velocity_m_s,p.ion_collision_s]}else{vec![f64::NAN;5]}).collect();
  let e:Vec<_>=gates.iter().flat_map(|g|g.result.as_ref().map(|f|f.standard_error.map(|e|e.unwrap_or(f64::NAN))).unwrap_or([f64::NAN;5])).collect();
  array(&fit,"range_m",&[gates.len()],&gates.iter().map(|g|g.range_m).collect::<Vec<_>>(),"m")?;

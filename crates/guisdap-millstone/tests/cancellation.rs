@@ -148,3 +148,11 @@ fn weak_subtraction_is_distinct_from_confirmed_removal_and_extremely_weak_is_ski
     assert_eq!(c.cleaned, y);
     assert!(c.usable.iter().all(|v| *v));
 }
+#[test]
+fn echo_over_background_rejects_pulse_without_fabricated_calibration(){
+ let tx=tx();let d=Detection{delay_samples:1500.,doppler_hz:1000.};let t=template(&tx,d.delay_samples,d.doppler_hz,1e6,tx.len(),16);
+ let y:Vec<_>=noise(tx.len(),71).iter().zip(&t).map(|(n,t)|n+200.*t).collect();
+ let c=cancel(&y,&tx,&[d],1e6,[1600,2000],&Settings::default()).unwrap();
+ assert_eq!(c.cleaned,y);assert!(c.usable.iter().all(|&v|!v));assert!(!c.diagnostic.accepted);assert!(!c.diagnostic.applied);assert_eq!(c.diagnostic.reason,"background_gate_contaminated");
+ let qa=serde_json::to_value(c.diagnostic).unwrap();assert!(qa["noise_rms"].is_null());assert!(qa["heldout_rms_over_noise"].is_null());
+}

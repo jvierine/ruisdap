@@ -123,6 +123,42 @@ fn mean_power(z: &[C], window: [usize; 2], dc: C) -> f64 {
         .sum::<f64>()
         / (window[1] - window[0]) as f64
 }
+fn receiver_calibration(pulses:&[Pulse],filtered:&[Vec<C>],s:&Settings,injection_temperature_k:f64)->Result<(f64,f64,f64)>{
+    // Fully rejected pulses cannot calibrate the remaining science samples.
+    let calibration:Vec<_>=filtered.iter().zip(pulses).filter(|(_,p)|p.usable.iter().any(|&x|x)).map(|(z,_)|z).collect();
+    ensure!(!calibration.is_empty(),"no usable receiver calibration pulses");
+    let means: Vec<_> = calibration
+        .iter()
+        .map(|z| {
+            z[s.noise_gate[0]..s.noise_gate[1]].iter().sum::<C>()
+                / (s.noise_gate[1] - s.noise_gate[0]) as f64
+        })
+        .collect();
+    let dc = C::new(
+        percentile(&means.iter().map(|z| z.re).collect::<Vec<_>>(), 0.5),
+        percentile(&means.iter().map(|z| z.im).collect::<Vec<_>>(), 0.5),
+    );
+    let noise = percentile(
+        &calibration
+            .iter()
+            .map(|z| mean_power(z, s.noise_gate, dc))
+            .collect::<Vec<_>>(),
+        0.5,
+    );
+    let injection = percentile(
+        &calibration
+            .iter()
+            .map(|z| mean_power(z, s.injection_gate, dc))
+            .collect::<Vec<_>>(),
+        0.5,
+    );
+    let gain = (injection - noise) / injection_temperature_k;
+    ensure!(
+        gain.is_finite() && gain > 0.,
+        "noise injection does not establish positive receiver gain"
+    );
+    Ok((noise,injection,gain))
+}
 pub fn estimate(pulses: &[Pulse], s: &Settings, injection_temperature_k: f64) -> Result<Estimate> {
     estimate_with_progress(pulses, s, injection_temperature_k, |_, _, _| Ok(()))
 }
@@ -206,36 +242,7 @@ pub fn estimate_with_progress(
         }
         masks.push(mask);
     }
-    let means: Vec<_> = filtered
-        .iter()
-        .map(|z| {
-            z[s.noise_gate[0]..s.noise_gate[1]].iter().sum::<C>()
-                / (s.noise_gate[1] - s.noise_gate[0]) as f64
-        })
-        .collect();
-    let dc = C::new(
-        percentile(&means.iter().map(|z| z.re).collect::<Vec<_>>(), 0.5),
-        percentile(&means.iter().map(|z| z.im).collect::<Vec<_>>(), 0.5),
-    );
-    let noise = percentile(
-        &filtered
-            .iter()
-            .map(|z| mean_power(z, s.noise_gate, dc))
-            .collect::<Vec<_>>(),
-        0.5,
-    );
-    let injection = percentile(
-        &filtered
-            .iter()
-            .map(|z| mean_power(z, s.injection_gate, dc))
-            .collect::<Vec<_>>(),
-        0.5,
-    );
-    let gain = (injection - noise) / injection_temperature_k;
-    ensure!(
-        gain.is_finite() && gain > 0.,
-        "noise injection does not establish positive receiver gain"
-    );
+    let (noise,injection,gain)=receiver_calibration(pulses,&filtered,s,injection_temperature_k)?;
     let mut out = Estimate {
         acf: vec![C::new(f64::NAN, f64::NAN); nr * nl],
         ground_clutter_acf: vec![C::new(f64::NAN, f64::NAN); nr * nl],
@@ -399,4 +406,13 @@ mod tests {
         let rows = vec![vec![(0, C::new(1., 0.)), (1, C::new(1., 0.))]; 4];
         assert!(solve(&rows, &[C::new(1., 0.); 4], &[1.; 4], 2).is_err());
     }
+    #[test]
+    fn receiver_gain_excludes_fully_rejected_pulses(){
+        let s:Settings=serde_json::from_value(serde_json::json!({"sample_rate_hz":1.,"decimation":1,"lag_samples":[1],"range_start":0,"range_end":1,"measurement_start":0,"measurement_end":1,"tx_gate":[0,1],"echo_gate":[0,4],"noise_gate":[0,2],"injection_gate":[2,4],"filter_half":1,"passband_hz":0.1})).unwrap();
+        let mut filtered=Vec::new();let mut pulses=Vec::new();
+        for i in 0..56{let a=if i<16{1.}else{1e9};filtered.push(vec![C::new(-a,0.),C::new(a,0.),C::new(-5f64.sqrt()*a,0.),C::new(5f64.sqrt()*a,0.)]);pulses.push(Pulse{echo:vec![],transmit:vec![],pair:0,usable:vec![i<16;4]});}
+        let(noise,injection,gain)=receiver_calibration(&pulses,&filtered,&s,2.).unwrap();assert!((noise-1.).abs()<1e-14);assert!((injection-5.).abs()<1e-14);assert!((gain-2.).abs()<1e-14);
+        for p in &mut pulses{p.usable.fill(false);}assert!(receiver_calibration(&pulses,&filtered,&s,2.).is_err());
+    }
+
 }

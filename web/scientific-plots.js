@@ -6,6 +6,13 @@ import {EISCAT_COLORMAP} from './plot-style.js';
 import {PLASMA_COLORMAP} from './plasma-colormap.js';
 import {mathAsset,mathLabel} from './math-labels.js';
 const charts=new Map(),curves=new Map();
+// Keep the common time-axis edges valid in a narrow embedded viewer as well
+// as on a full desktop. Shared maps, debris and diagnostics use the same edges.
+function fitMargins(width,margins){
+ if(width>=900)return margins;
+ const [left,top,right,bottom]=margins;
+ return [Math.min(left,Math.max(52,width*160/900)),top,Math.min(right,Math.max(120,width*180/900)),bottom];
+}
 let openColours=null;
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&openColours){openColours.hidden=true;openColours.parentElement.querySelector('.scientific-colour-hit')?.setAttribute('aria-expanded','false');openColours=null;}});
 const clip=(v,a,b)=>Math.max(a,Math.min(b,v));
@@ -18,7 +25,7 @@ export function fieldPanel(parent,id,title,x,y,values,options={}){
  article.querySelector('h3').textContent=title;
  article.classList.toggle('shared-time-row',!!options.sharedTime);article.classList.toggle('shared-time-last',!!options.sharedTimeLast);
  let xe,filled;if(options.time!==false)[xe,filled]=timeCells(x,values,y.length,options.intervals);else{xe=edges(x);filled=values;}
- const ye=edges(y),initial=options.limits||iqr(values,options.mode===1),spec={timeGroup:options.time===false?null:'dataset-time',...options,title,bounds:[xe[0],xe.at(-1),ye[0],ye.at(-1)],limits:initial,defaultLimits:options.limits,x_edges:xe,y_edges:ye};
+ const ye=edges(y),initial=options.limits||iqr(values,options.mode===1),spec={timeGroup:options.time===false?null:'dataset-time',...options,title,bounds:[...(options.timeBounds||[xe[0],xe.at(-1)]),ye[0],ye.at(-1)],limits:initial,defaultLimits:options.limits,x_edges:xe,y_edges:ye};
  const item=renderField(id,filled,xe.length-1,ye.length-1,spec);
  return {article,item,view:item.view,viewport:item.viewport,redraw:()=>item.redraw(),xe,update:(data,settings={})=>fieldPanel(parent,id,settings.title||item.spec.title,x,y,data,{...options,...settings}),markers:points=>item.markers(points),setCursor:(x,y)=>item.setCursor(x,y)};
 }
@@ -79,10 +86,10 @@ function syncTime(source){
 function visibleBounds(p){const a=p.spec.bounds,b=p.viewport.bounds();return [a[0]+(a[1]-a[0])*b[0],a[0]+(a[1]-a[0])*b[2],a[2]+(a[3]-a[2])*b[1],a[2]+(a[3]-a[2])*b[3]];}
 function draw(p){
  if(!p.box.clientWidth||p.box.closest('[hidden]'))return;
- const started=performance.now(),s=p.spec,w=p.box.clientWidth,h=p.box.clientHeight,dpr=devicePixelRatio||1,b=visibleBounds(p),bottom=s.sharedTime&&!s.sharedTimeLast?10:58,top=s.sharedTime?10:22,margins=[s.sharedTime?160:76,top,s.sharedTime?180:132,bottom];
+ const started=performance.now(),s=p.spec,w=p.box.clientWidth,h=p.box.clientHeight,dpr=devicePixelRatio||1,b=visibleBounds(p),bottom=s.sharedTime&&!s.sharedTimeLast?10:58,top=s.sharedTime?10:22,margins=fitMargins(w,[s.sharedTime?160:76,top,s.sharedTime?180:132,bottom]);
  p.axes.axes({width:w,height:h,dpr,bounds:b,margins,x:{label:s.time===false?(s.xlabel||'Frequency offset / MHz'):'Time / UTC',format:s.sharedTime&&!s.sharedTimeLast?'none':s.time===false?'':'utc'},y:{label:s.ylabel||'Slant range / km',format:''}});
  const [l,t,pw,ph]=p.axes.axes_rect();for(const overlay of p.box.querySelectorAll('canvas[id$="-quality"]'))Object.assign(overlay.style,{left:l+'px',top:t+'px',width:pw+'px',height:ph+'px'});Object.assign(p.canvas.style,{left:l+'px',top:t+'px',width:pw+'px',height:ph+'px'});if(p.canvas.width!==Math.round(pw*dpr))p.canvas.width=Math.round(pw*dpr);if(p.canvas.height!==Math.round(ph*dpr))p.canvas.height=Math.round(ph*dpr);if(s.x_edges&&s.y_edges){const x=s.x_edges,y=s.y_edges;p.view.set_view((b[0]-(s.dataOriginX||0)-x[0])/(x.at(-1)-x[0]),(b[2]-y[0])/(y.at(-1)-y[0]),(b[1]-(s.dataOriginX||0)-x[0])/(x.at(-1)-x[0]),(b[3]-y[0])/(y.at(-1)-y[0]));}else p.view.set_view(...p.viewport.bounds());
- const barLeft=w-(s.sharedTime?156:108);for(const c of [p.barCanvas,p.barAxesCanvas]){c.style.left=barLeft+'px';c.style.top='0';}
+ const barLeft=w-margins[2]+24;for(const c of [p.barCanvas,p.barAxesCanvas]){c.style.left=barLeft+'px';c.style.top='0';}
  Object.assign(p.barCanvas.style,{top:t+'px',width:'16px',height:ph+'px'});if(p.barCanvas.width!==Math.round(16*dpr))p.barCanvas.width=Math.round(16*dpr);if(p.barCanvas.height!==Math.round(ph*dpr))p.barCanvas.height=Math.round(ph*dpr);p.bar.draw();
  p.barAxesCanvas.style.width='108px';p.barAxesCanvas.style.height=h+'px';
  const log=s.mode===1;p.barAxes.axes({width:108,height:h,dpr,bounds:[0,1,log?Math.log10(s.limits[0]):s.limits[0],log?Math.log10(s.limits[1]):s.limits[1]],margins:[0,t,92,bottom],right_y:true,no_frame:true,x:{format:'none'},y:{label:mathAsset(s.colorbarTitle||s.title)?'':s.colorbarTitle||s.title||'',format:log?'log10':''}});
@@ -94,6 +101,7 @@ function draw(p){
  p.barCanvas.style.zIndex=2;p.barAxesCanvas.style.zIndex=1;
  p.markerLayer.replaceChildren();for(const point of p.points){const x=l+(point.x-b[0])/(b[1]-b[0])*pw,y=t+(b[3]-point.y)/(b[3]-b[2])*ph;if(x<l||x>l+pw||y<t||y>t+ph)continue;const marker=document.createElement('button');marker.className='cal-marker';marker.style.left=x+'px';marker.style.top=y+'px';marker.innerHTML='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12h6m8 0h6M12 2v6m0 8v6" class="marker-outline"/><path d="M2 12h6m8 0h6M12 2v6m0 8v6" class="marker-ink"/></svg>';if(point.number){const label=document.createElement('span');label.className='cal-marker-label';label.textContent=point.number;marker.append(label);}marker.type='button';marker.dataset.included=String(!!point.included);marker.title=(point.included?'Included':'Excluded')+' · '+(point.label||'Remove calibration point');marker.setAttribute('aria-label',point.label||'Remove calibration point');marker.onclick=e=>{e.stopPropagation();point.remove?.();};p.markerLayer.append(marker);}
  const c=p.selected;p.rangeCursor.hidden=!c||c[1]<b[2]||c[1]>b[3];if(c)Object.assign(p.rangeCursor.style,{left:l+'px',top:(t+(b[3]-c[1])/(b[3]-b[2])*ph)+'px',width:pw+'px'});p.cursor.hidden=!c||c[0]<b[0]||c[0]>b[1];if(c){Object.assign(p.cursor.style,{left:(l+(c[0]-b[0])/(b[1]-b[0])*pw)+'px',top:t+'px',height:ph+'px'});}
+ p.canvas.dataset.visibleBounds=JSON.stringify(b);p.canvas.dataset.axesRect=JSON.stringify([l,t,pw,ph]);
  p.canvas.dataset.drawMs=(performance.now()-started).toFixed(3);p.canvas.dataset.renderer='rustplotlib';
 }
 export function curve(id,spec){
@@ -104,7 +112,7 @@ export function curve(id,spec){
  p.spec=spec;if(spec.resetViewport)p.viewport.reset();p.canvas.style.height=(spec.height||(host.closest('.plasma-profile-pair')?520:300))+'px';if(!host.clientWidth||host.closest('[hidden]')||p.pending)return;p.pending=true;requestAnimationFrame(()=>{p.pending=false;drawCurve(p);});
 }
 function drawCurve(p){const spec=p.spec,host=p.host,b=spec.bounds,v=p.viewport.bounds(),bounds=[b[0]+(b[1]-b[0])*v[0],b[0]+(b[1]-b[0])*v[2],b[2]+(b[3]-b[2])*v[1],b[2]+(b[3]-b[2])*v[3]];
- p.view.axes({width:host.clientWidth,height:spec.height||(host.closest('.plasma-profile-pair')?520:300),dpr:devicePixelRatio||1,bounds,...(spec.margins?{margins:spec.margins}:{}),x:{label:mathAsset(spec.xlabel)?'':spec.xlabel||'',format:spec.xformat||''},y:{label:mathAsset(spec.ylabel)?'':spec.ylabel||'',format:spec.yformat||''}});
+ p.view.axes({width:host.clientWidth,height:spec.height||(host.closest('.plasma-profile-pair')?520:300),dpr:devicePixelRatio||1,bounds,...(spec.margins?{margins:fitMargins(host.clientWidth,spec.margins)}:{}),x:{label:mathAsset(spec.xlabel)?'':spec.xlabel||'',format:spec.xformat||''},y:{label:mathAsset(spec.ylabel)?'':spec.ylabel||'',format:spec.yformat||''}});
  const rect=p.view.axes_rect(),height=spec.height||(host.closest('.plasma-profile-pair')?520:300);
  mathLabel(p,'x',mathAsset(spec.xlabel),spec.xlabel,rect[0]+rect[2]/2,height-17);
  mathLabel(p,'y',mathAsset(spec.ylabel),spec.ylabel,18,rect[1]+rect[3]/2,true);
@@ -123,7 +131,7 @@ function drawCurve(p){const spec=p.spec,host=p.host,b=spec.bounds,v=p.viewport.b
  }
  for(const b of spec.bands||[])p.view.band(new Float64Array(b.values.map(v=>v??NaN)),b.color);
  for(const series of spec.series||[]){const xy=new Float64Array(series.xy.map(v=>v??NaN));if(series.segments)p.view.segments(xy,series.color||'#236b8e');else if(series.style!==undefined)p.view.markers(xy,series.color||'#236b8e',series.radius||3,series.style);else p.view.series(xy,series.color||'#236b8e',series.line!==false,series.radius||0);}
- p.note.textContent=spec.caption||'';p.canvas.dataset.renderer='rustplotlib';
+ p.canvas.dataset.visibleBounds=JSON.stringify(bounds);p.canvas.dataset.axesRect=JSON.stringify(rect);p.note.textContent=spec.caption||'';p.canvas.dataset.renderer='rustplotlib';
 }
 let beataPower=null;
 window.ruisdapField=(id,values,nx,ny,spec)=>{

@@ -52,4 +52,21 @@ class NativeView(unittest.TestCase):
             with self.assertRaises(AssertionError):
                 module.export(historical,fits,output,public)
 
+class DebrisEvents(unittest.TestCase):
+    def test_delay_units_status_and_no_partner_duplication(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with h5py.File(pathlib.Path(tmp)/'source.h5','w') as h:
+                r=h.create_group('records/a');r['pulse_sample']=[1712534400123456+i*10000 for i in range(5)]
+                store(r,'configuration_json',dict(lpi=dict(sample_rate_hz=1e6,science_pulse=[True,False,True,True,True])))
+                debris=r.create_group('debris')
+                def diagnostic(accepted,applied,confirmed,delay):return dict(accepted=accepted,applied=applied,confirmed=confirmed,detections=[dict(delay_samples=delay,doppler_hz=-4200.)])
+                store(debris,'diagnostics_json',[diagnostic(True,True,True,2000),diagnostic(True,True,True,2500),diagnostic(False,True,False,3000),diagnostic(True,True,False,4000),diagnostic(True,False,False,5000)])
+                events=module.debris_events(r)
+                self.assertEqual(len(events),4)
+                self.assertEqual([e[2] for e in events],[0,2,1,3])
+                np.testing.assert_allclose([e[1] for e in events],np.array([2000,3000,4000,5000])*299792.458/2e6)
+                self.assertAlmostEqual(events[0][0],1712534400.123456,places=6)
+                self.assertTrue(all(e[3]==-4200 for e in events))
+                self.assertEqual(h['records/a/pulse_sample'][1],1712534400133456)
+
 if __name__=='__main__':unittest.main()

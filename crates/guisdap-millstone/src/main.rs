@@ -16,6 +16,7 @@ struct Args {
 #[derive(Subcommand)]
 enum Command {
     Process { manifest: PathBuf },
+    ProcessArchive { manifest: PathBuf },
     Fit { manifest: PathBuf },
     EstimateCalibration { manifest: PathBuf },
     Cancel { input: PathBuf, output: PathBuf },
@@ -86,24 +87,65 @@ fn main() -> Result<()> {
         }
         Command::EstimateCalibration {manifest} => {
             ensure!(ranks==1,"calibration estimate takes one rank");
-            let points:Vec<guisdap_millstone::fitting::CalibrationPoint>=serde_json::from_slice(&fs::read(manifest)?)?;
+            let points:Vec<guisdap_millstone::fitting::CalibrationPoint>=serde_json::from_slice(&fs::read(&manifest)?)?;
             let estimates:Vec<_>=points.iter().map(guisdap_millstone::fitting::calibration).collect::<Result<_>>()?;
             println!("{}",serde_json::to_string(&estimates)?);
         }
         Command::Fit {manifest} => {
-            let m:guisdap_millstone::fitting::Manifest=serde_json::from_slice(&fs::read(manifest)?)?;
+            let m:guisdap_millstone::fitting::Manifest=serde_json::from_slice(&fs::read(&manifest)?)?;
             fs::create_dir_all(&m.output)?;
             let mut failed=0;
+            use sha2::{Digest,Sha256};
+            let mut checkpoint=Sha256::new();checkpoint.update(fs::read(&manifest)?);checkpoint.update(fs::read(std::env::current_exe()?)?);let fingerprint=format!("{:x}",checkpoint.finalize());
             let jobs=guisdap_millstone::fitting::jobs(&m)?;
             ensure!(!jobs.is_empty(),"no calibrated antenna integrations");
             for (job,inputs) in jobs.iter().enumerate().filter(|(i,_)|i%ranks==rank){
                 let output=m.output.join(format!("fit-{job:06}.h5"));
-                if let Err(e)=guisdap_millstone::fitting::run(inputs,&output,&m){failed+=1;eprintln!("rank {rank} fit {job}: {e:#}");}
+                let result=(||->Result<()>{
+                    if output.exists(){
+                        use sha2::{Digest,Sha256};
+                        let h=hdf5::File::open(&output)?;ensure!(h.dataset("fit_checkpoint_sha256")?.read_raw::<u8>()?==fingerprint.as_bytes(),"fit checkpoint manifest or kernel changed");let records=h.group("records")?;let r=records.group(&records.member_names()?[0])?;
+                        r.dataset("ion_fit/results_json")?;
+                        let sources:Vec<serde_json::Value>=serde_json::from_slice(&h.dataset("sources/combined/records_json")?.read_raw::<u8>()?)?;
+                        let old:std::collections::BTreeSet<_>=sources.iter().map(|s|s["path"].as_str().unwrap_or("").to_owned()).collect();
+                        let new:std::collections::BTreeSet<_>=inputs.iter().map(|p|p.to_string_lossy().into_owned()).collect();ensure!(old==new,"fit checkpoint input set changed");
+                        for s in sources{ensure!(format!("{:x}",Sha256::digest(fs::read(s["path"].as_str().unwrap())?))==s["sha256"].as_str().unwrap_or(""),"fit checkpoint input changed");}
+                        return Ok(());
+                    }
+                    guisdap_millstone::fitting::run(inputs,&output,&m)?;
+                    let h=hdf5::File::open_rw(&output)?;h.new_dataset_builder().with_data(fingerprint.as_bytes()).create("fit_checkpoint_sha256")?;h.flush()?;Ok(())
+                })();
+                if let Err(e)=result{failed+=1;eprintln!("rank {rank} fit {job}: {e:#}");}
             }
             ensure!(failed==0,"rank {rank}: {failed} fit jobs failed");
         }
+        Command::ProcessArchive {manifest} => {
+            let m:guisdap_millstone::archive::Manifest=serde_json::from_slice(&fs::read(&manifest)?)?;
+            ensure!(m.end_unix_s>m.start_unix_s && (m.end_unix_s-m.start_unix_s)%10==0,"invalid archive integration window");
+            let mut archive=guisdap_millstone::archive::Archive::open(&m)?;
+            let total=((m.end_unix_s-m.start_unix_s)/10)as usize;
+            // Allocate small contiguous blocks dynamically. Workers keep the RF
+            // cache warm within each block; heavy CFAR passes cannot pin one rank.
+            fs::create_dir_all(&m.output)?;let counter=m.output.join(format!("work-counter-{}-{}",m.start_unix_s,m.end_unix_s));
+            if rank==0{fs::write(&counter,0u64.to_le_bytes())?;}
+            #[cfg(feature="mpi")]{use mpi::traits::*;mpi::topology::SimpleCommunicator::world().barrier();}
+            use std::io::{Read as _,Write as _,Seek as _};
+            let mut queue=std::fs::OpenOptions::new().read(true).write(true).open(counter)?;
+            let start=Instant::now();let mut failed=0;let mut done=0;
+            loop{
+                queue.lock()?;queue.rewind()?;let mut bytes=[0u8;8];queue.read_exact(&mut bytes)?;let lo=u64::from_le_bytes(bytes)as usize;
+                if lo>=total{queue.unlock()?;break;}let hi=(lo+1).min(total);queue.rewind()?;queue.write_all(&(hi as u64).to_le_bytes())?;queue.unlock()?;
+                for job in lo..hi{
+                    let begin=m.start_unix_s+10*job as u64;
+                    progress(m.live_directory.as_deref(),rank,ranks,"reading DigitalRF and reducing",done,total.div_ceil(ranks),start)?;
+                    if let Err(e)=guisdap_millstone::archive::run_window(&mut archive,&m,begin){failed+=1;eprintln!("rank {rank} archive window {begin}: {e:#}");}done+=1;
+                }
+            }
+            progress(m.live_directory.as_deref(),rank,ranks,if failed==0{"complete"}else{"failed"},done,done,start)?;
+            ensure!(failed==0,"rank {rank}: {failed} archive windows failed");
+        }
         Command::Process { manifest } => {
-            let m: Manifest = serde_json::from_slice(&fs::read(manifest)?)?;
+            let m: Manifest = serde_json::from_slice(&fs::read(&manifest)?)?;
             ensure!(!m.inputs.is_empty(), "empty manifest");
             fs::create_dir_all(&m.output)?;
             let jobs: Vec<_> = m

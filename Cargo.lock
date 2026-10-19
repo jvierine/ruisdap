@@ -587,6 +587,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "guisdap-digital-rf"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "hdf5-metno",
+ "num-complex",
+ "tempfile",
+]
+
+[[package]]
 name = "guisdap-ion"
 version = "0.1.0"
 dependencies = [
@@ -603,7 +614,9 @@ name = "guisdap-millstone"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
+ "guisdap-digital-rf",
  "guisdap-ion",
  "hdf5-metno",
  "mpi",

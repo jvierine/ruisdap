@@ -26,6 +26,36 @@ def write_json(path, value):
     path.chmod(0o644)
 
 
+
+def debris_events(record):
+    """Per-science-pulse CFAR/refined detections, never repeated clutter partners.
+    Refined delay is relative to the measured transmit leakage and has had the
+    measured transmitter-to-receiver timing offset removed in the archive reader.
+    """
+    if 'debris/diagnostics_json' not in record:return []
+    config=read_json(record['configuration_json'])
+    diagnostics=read_json(record['debris/diagnostics_json'])
+    samples=record['pulse_sample'][:]
+    science=config['lpi'].get('science_pulse') or [True]*len(samples)
+    assert len(diagnostics)==len(samples)==len(science),'Debris/pulse identity dimensions differ'
+    sr=config['lpi']['sample_rate_hz'];assert sr>0
+    events=[]
+    for sample,use,diagnostic in zip(samples,science,diagnostics):
+        if not use:continue
+        # A failed joint validation masks the contaminated support even if a
+        # subtraction was attempted. Do not call that an accepted subtraction.
+        status=(2 if not diagnostic['accepted'] else
+                0 if diagnostic['applied'] and diagnostic['confirmed'] else
+                1 if diagnostic['applied'] else 3)
+        shrinkage=diagnostic.get('amplitude_shrinkage')
+        if shrinkage is not None:assert len(shrinkage) in [0,len(diagnostic['detections'])], 'Debris amplitude dimensions differ'
+        for index,detection in enumerate(diagnostic['detections']):
+            event_status=3 if diagnostic['accepted'] and shrinkage and shrinkage[index]==0 else status
+            delay=detection['delay_samples'];doppler=detection['doppler_hz']
+            assert np.isfinite(delay) and delay>=0 and np.isfinite(doppler),'Invalid debris coordinates'
+            events.append((int(sample)/sr,delay/sr*299792.458/2,event_status,doppler))
+    return events
+
 def export(historical, fits, output, public):
     assert not output.exists(), 'Choose a new immutable output directory'
     original = json.loads((historical / 'manifest.json').read_text())
@@ -42,6 +72,7 @@ def export(historical, fits, output, public):
     output.chmod(0o755)
     all_parameters = []
     ranges = None
+    debris=[];debris_sources=set()
     for path in sorted(fits.glob('fit-*.h5')):
         with h5py.File(path) as h:
             r = h['records'][next(iter(h['records']))]
@@ -61,6 +92,8 @@ def export(historical, fits, output, public):
                 with h5py.File(source['path']) as s:
                     sr = s['records'][next(iter(s['records']))]
                     tsys.append(float(sr['ion_line/system_temperature_k'][0]))
+                    if source['path'] not in debris_sources:
+                        debris.extend(debris_events(sr));debris_sources.add(source['path'])
             name = path.stem
             lag = r['ion_line/lag_s'][:]
             observed, variance = r['ion_line/acf'][:], r['ion_line/variance'][:]
@@ -108,6 +141,18 @@ def export(historical, fits, output, public):
     # Viewer packing is [parameter, range, time], the same as historical exports.
     np.stack(all_parameters).transpose(2, 1, 0).astype('<f4').tofile(output / 'parameters.f32')
     (output / 'parameters.f32').chmod(0o644)
+    # UTC-relative float32 coordinates keep sub-second precision on the GPU;
+    # authoritative pulse keys and Doppler/quality diagnostics remain in HDF5.
+    if 'date' in original:
+        import datetime as dt
+        origin=dt.datetime.fromisoformat(original['date']).replace(tzinfo=dt.timezone.utc).timestamp()
+        events=np.asarray(debris,dtype=np.float64).reshape(-1,4)
+        if len(events):events[:,0]-=origin
+        events.astype('<f4').tofile(output/'debris.f32');(output/'debris.f32').chmod(0o644)
+        manifest.update(debris_url='debris.f32',debris_count=len(events),debris_time_origin_unix_s=origin,
+            debris_columns=['time_offset_s','slant_range_km','status','doppler_hz'],
+            debris_status=['Subtracted, confirmed','Weak subtraction','Masked after failed validation','Low-SNR candidate, retained'],
+            debris_definition='CFAR-seeded detections in science pulses, excluding duplicate clutter partners. Refined delay is corrected for measured TX/RX channel timing. Candidate detections are not independent confirmations of an orbiting object.')
     write_json(output / 'manifest.json', manifest)
     print(f'Exported {len(all_parameters)} native fits to {output}')
 

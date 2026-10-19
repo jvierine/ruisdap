@@ -529,3 +529,10 @@ residual ambiguity surface. Neither finding justifies adding arbitrary
 residual candidates in production: such additions can also remove diffuse ISR.
 The `check_residual_candidates` example provides a bounded joint-fit experiment
 on the original source without changing production seeds or writing voltages.
+In that experiment, adding the observed residual components cleared the
+CFAR-level layer residual in 37 of the 39 targeted cases; all 39 joint fits
+passed the native checks and two still had a detectable residual. Additional
+amplitude SNR ranged from 11.9 to 24.0 dB under the existing white-noise
+uncertainty assumption. This demonstrates a possible fit improvement, not
+plasma preservation or a confirmed second object. Diffuse-null and injected
+target controls remain required before adopting this in campaign processing.

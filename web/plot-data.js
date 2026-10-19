@@ -15,5 +15,5 @@ export function timeCells(times,values,ny,intervals,gap=3600){
 export function edges(x){return new Float32Array(x.length===1?[x[0]-.5,x[0]+.5]:[x[0]-(x[1]-x[0])/2,...x.slice(1).map((v,i)=>(v+x[i])/2),x.at(-1)+(x.at(-1)-x.at(-2))/2]);}
 export function iqr(values,log=false){
  const v=[],stride=Math.max(1,Math.floor(values.length/50000));for(let i=0;i<values.length;i+=stride)if(Number.isFinite(values[i])&&(!log||values[i]>0))v.push(log?Math.log10(values[i]):values[i]);v.sort((a,b)=>a-b);
- if(!v.length)return [0,1];const q=p=>v[Math.floor(p*(v.length-1))],d=Math.max(q(.75)-q(.25),Math.abs(q(.75))*1e-6,1e-12),a=q(.25)-1.5*d,b=q(.75)+3*d;return log?[10**a,10**b]:[a,b];
+ if(!v.length)return log?[1,10]:[0,1];const q=p=>v[Math.floor(p*(v.length-1))],d=Math.max(q(.75)-q(.25),Math.abs(q(.75))*1e-6,1e-12),a=Math.max(q(.01),q(.25)-1.5*d),b=Math.max(a+d*1e-6,Math.min(q(.99),q(.75)+1.5*d));return log?[10**a,10**b]:[a,b];
 }

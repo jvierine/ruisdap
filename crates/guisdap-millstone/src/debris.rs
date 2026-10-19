@@ -24,6 +24,13 @@ pub struct Settings {
     pub refine_doppler_hz: f64,
     pub min_amplitude_snr_db: f64,
     pub shrink_weak_amplitudes: bool,
+    /// Bartlett HAC bandwidth for conditional amplitude uncertainty. Zero keeps
+    /// the legacy white-background assumption; positive values are experimental.
+    #[serde(skip_serializing_if = "zero_lag")]
+    pub correlation_lag_s: f64,
+}
+fn zero_lag(value: &f64) -> bool {
+    *value == 0.
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -39,6 +46,7 @@ impl Default for Settings {
             refine_doppler_hz: 100.,
             min_amplitude_snr_db: 6.,
             shrink_weak_amplitudes: true,
+            correlation_lag_s: 0.,
         }
     }
 }
@@ -49,6 +57,10 @@ pub struct Diagnostic {
     pub confirmed: bool,
     pub amplitude_snr_db: Vec<f64>,
     pub amplitude_shrinkage: Vec<f64>,
+    #[serde(default)]
+    pub amplitude_white_variance: Vec<f64>,
+    #[serde(default)]
+    pub amplitude_covariance_variance: Vec<f64>,
     pub reason: String,
     pub input_rms_over_noise: f64,
     pub residual_rms_over_noise: f64,
@@ -78,22 +90,44 @@ fn sinc(x: f64) -> f64 {
 }
 /// Noncircular fractional delay with a compact windowed-sinc interpolation of
 /// the *measured* complete pulse, preserving all bit edges and receiver ringing.
-pub fn template(tx: &[C], delay: f64, doppler: f64, sr: f64, n: usize, half: usize) -> Vec<C> {
+fn delayed_template(tx: &[C], delay: f64, n: usize, half: usize) -> Vec<C> {
+    // Zero samples cannot contribute to interpolation. Preserve the original
+    // summation order for every contributing term, including pulse ringing.
+    let first = tx
+        .iter()
+        .position(|z| z.re != 0. || z.im != 0.)
+        .map(|i| i as isize)
+        .unwrap_or(1);
+    let last = tx
+        .iter()
+        .rposition(|z| z.re != 0. || z.im != 0.)
+        .map(|i| i as isize)
+        .unwrap_or(0);
     (0..n)
         .map(|i| {
             let t = i as f64 - delay;
             let centre = t.floor() as isize;
             let mut z = C::default();
-            for j in centre - half as isize + 1..=centre + half as isize {
-                if j >= 0 && (j as usize) < tx.len() {
-                    let u = t - j as f64;
-                    if u.abs() < half as f64 {
-                        z += tx[j as usize] * (sinc(u) * sinc(u / half as f64))
-                    }
+            for j in (centre - half as isize + 1).max(first)..=(centre + half as isize).min(last) {
+                let u = t - j as f64;
+                if u.abs() < half as f64 {
+                    z += tx[j as usize] * (sinc(u) * sinc(u / half as f64));
                 }
             }
-            z * C::from_polar(1., 2. * PI * doppler * i as f64 / sr)
+            z
         })
+        .collect()
+}
+fn doppler_phase(doppler: f64, sr: f64, n: usize) -> Vec<C> {
+    (0..n)
+        .map(|i| C::from_polar(1., 2. * PI * doppler * i as f64 / sr))
+        .collect()
+}
+pub fn template(tx: &[C], delay: f64, doppler: f64, sr: f64, n: usize, half: usize) -> Vec<C> {
+    delayed_template(tx, delay, n, half)
+        .into_iter()
+        .enumerate()
+        .map(|(i, z)| z * C::from_polar(1., 2. * PI * doppler * i as f64 / sr))
         .collect()
 }
 fn amplitude(y: &[C], t: &[C], mask: &[bool]) -> Option<C> {
@@ -119,6 +153,39 @@ fn rms(y: &[C], mask: &[bool]) -> f64 {
         .sum::<f64>()
         / n as f64)
         .sqrt()
+}
+fn reject_pulse(y: &[C], detections: Vec<Detection>, reason: &str, adc_limit: f64) -> Cancellation {
+    Cancellation {
+        cleaned: y.to_vec(),
+        usable: vec![false; y.len()],
+        diagnostic: Diagnostic {
+            accepted: false,
+            applied: false,
+            confirmed: false,
+            amplitude_snr_db: vec![],
+            amplitude_shrinkage: vec![],
+            amplitude_white_variance: vec![],
+            amplitude_covariance_variance: vec![],
+            reason: reason.into(),
+            input_rms_over_noise: f64::NAN,
+            residual_rms_over_noise: f64::NAN,
+            heldout_rms_over_noise: f64::NAN,
+            edge_rms_over_noise: f64::NAN,
+            heldout_coherent_sigma: f64::NAN,
+            input_coherent_sigma: f64::NAN,
+            clip_fraction: y
+                .iter()
+                .filter(|z| z.re.abs() >= adc_limit || z.im.abs() >= adc_limit)
+                .count() as f64
+                / y.len() as f64,
+            fitted_complex_parameters: 0,
+            fitted_samples: 0,
+            projection_fraction: 0.,
+            amplitudes: vec![],
+            detections,
+            noise_rms: f64::NAN,
+        },
+    }
 }
 pub fn cancel(
     y: &[C],
@@ -146,7 +213,9 @@ pub fn cancel(
             && settings.adc_limit > 0.
             && settings.max_residual_rms_ratio > 0.
             && settings.max_edge_rms_ratio > 0.
-            && settings.max_coherent_sigma > 0.,
+            && settings.max_coherent_sigma > 0.
+            && settings.correlation_lag_s.is_finite()
+            && settings.correlation_lag_s >= 0.,
         "invalid cancellation settings"
     );
     ensure!(
@@ -168,10 +237,16 @@ pub fn cancel(
         &bg.iter().map(|z| (*z - dc).norm_sqr()).collect::<Vec<_>>(),
         0.5,
     ) / 2f64.ln();
-    ensure!(
-        noise2.is_finite() && noise2 > 0.,
-        "no positive background noise estimate"
-    );
+    if !noise2.is_finite() || noise2 <= 0. {
+        // A flat/dead recorded background is a data-quality failure, not an
+        // invented noise floor or a reason to abort unrelated source windows.
+        return Ok(reject_pulse(
+            y,
+            detections.to_vec(),
+            "invalid_background_noise",
+            settings.adc_limit,
+        ));
+    }
     let noise = noise2.sqrt();
     let mut refined = Vec::new();
     let mut templates = Vec::new();
@@ -185,13 +260,39 @@ pub fn cancel(
         };
         for level in 0..levels {
             let mut best = f64::INFINITY;
+            // Delay and Doppler are separable. Reuse the five interpolated
+            // pulses and five phase ramps instead of recomputing each 25 times.
+            let delays: Vec<_> = (-2..=2)
+                .map(|di| {
+                    centre.delay_samples
+                        + di as f64 * settings.refine_delay_samples / (2. * 4f64.powi(level))
+                })
+                .collect();
+            let frequencies: Vec<_> = (-2..=2)
+                .map(|fi| {
+                    centre.doppler_hz
+                        + fi as f64 * settings.refine_doppler_hz / (2. * 4f64.powi(level))
+                })
+                .collect();
+            let delayed: Vec<_> = delays
+                .iter()
+                .map(|&dd| delayed_template(tx, dd, y.len(), settings.interpolation_half))
+                .collect();
+            let phases: Vec<_> = frequencies
+                .iter()
+                .map(|&ff| doppler_phase(ff, sr, y.len()))
+                .collect();
             for di in -2..=2 {
                 for fi in -2..=2 {
                     let dd = centre.delay_samples
                         + di as f64 * settings.refine_delay_samples / (2. * 4f64.powi(level));
                     let ff = centre.doppler_hz
                         + fi as f64 * settings.refine_doppler_hz / (2. * 4f64.powi(level));
-                    let t = template(tx, dd, ff, sr, y.len(), settings.interpolation_half);
+                    let t: Vec<_> = delayed[(di + 2) as usize]
+                        .iter()
+                        .zip(&phases[(fi + 2) as usize])
+                        .map(|(z, p)| *z * *p)
+                        .collect();
                     let peak = t.iter().map(|z| z.norm_sqr()).fold(0., f64::max);
                     let train: Vec<_> = t
                         .iter()
@@ -252,24 +353,20 @@ pub fn cancel(
             }
         }
     }
-    if support.iter().enumerate().any(|(i,s)|*s&&(noise_window[0]..noise_window[1]).contains(&i)) {
+    if support
+        .iter()
+        .enumerate()
+        .any(|(i, s)| *s && (noise_window[0]..noise_window[1]).contains(&i))
+    {
         // No independent background calibration is available for this pulse.
         // Keep original voltages and reject it, including receiver-gain use.
         // Undefined QA ratios are serialized as null, never fabricated values.
-        return Ok(Cancellation {
-            cleaned:y.to_vec(),usable:vec![false;y.len()],
-            diagnostic:Diagnostic {
-                accepted:false,applied:false,confirmed:false,
-                amplitude_snr_db:vec![],amplitude_shrinkage:vec![],
-                reason:"background_gate_contaminated".into(),
-                input_rms_over_noise:f64::NAN,residual_rms_over_noise:f64::NAN,
-                heldout_rms_over_noise:f64::NAN,edge_rms_over_noise:f64::NAN,
-                heldout_coherent_sigma:f64::NAN,input_coherent_sigma:f64::NAN,
-                clip_fraction:y.iter().filter(|z|z.re.abs()>=settings.adc_limit||z.im.abs()>=settings.adc_limit).count()as f64/y.len()as f64,
-                fitted_complex_parameters:0,fitted_samples:0,projection_fraction:0.,
-                amplitudes:vec![],detections:refined,noise_rms:f64::NAN,
-            },
-        });
+        return Ok(reject_pulse(
+            y,
+            refined,
+            "background_gate_contaminated",
+            settings.adc_limit,
+        ));
     }
     let train: Vec<_> = support
         .iter()
@@ -294,6 +391,8 @@ pub fn cancel(
                 confirmed: false,
                 amplitude_snr_db: vec![],
                 amplitude_shrinkage: vec![],
+                amplitude_white_variance: vec![],
+                amplitude_covariance_variance: vec![],
                 reason: "no_detections".into(),
                 input_rms_over_noise: 1.,
                 residual_rms_over_noise: 1.,
@@ -355,7 +454,7 @@ pub fn cancel(
     // delay/Doppler search and template uncertainty are not included, so this
     // quantity controls conservative subtraction, not a claimed full posterior.
     let v_t = svd.v_t.as_ref().unwrap();
-    let variance: Vec<_> = (0..ncol)
+    let white_variance: Vec<_> = (0..ncol)
         .map(|j| {
             noise2
                 * (0..ncol)
@@ -364,6 +463,53 @@ pub fn cancel(
                 / scales[j].powi(2)
         })
         .collect();
+    let mut variance = white_variance.clone();
+    if settings.correlation_lag_s > 0. {
+        // Sandwich/HAC covariance of the actual complex least-squares estimator.
+        // A+ = V S^-1 U^H, including joint-template conditioning and missing
+        // training samples. Correlation is measured after target fitting, before
+        // shrinkage. Do not assume alternating training/hold blocks are independent.
+        let u = svd.u.as_ref().unwrap();
+        let locations: Vec<_> = train
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &yes)| yes.then_some(i))
+            .collect();
+        let first = *locations.first().unwrap();
+        let last = *locations.last().unwrap();
+        let residual: Vec<_> = locations
+            .iter()
+            .map(|&i| {
+                y[i] - templates
+                    .iter()
+                    .zip(&amplitudes)
+                    .map(|(t, a)| t[i] * *a)
+                    .sum::<C>()
+            })
+            .collect();
+        let bandwidth = ((settings.correlation_lag_s * sr).ceil() as usize).min(last - first);
+        for j in 0..ncol {
+            let mut influence = vec![C::default(); last - first + 1];
+            for (row, (&i, &e)) in locations.iter().zip(&residual).enumerate() {
+                let weight = (0..ncol)
+                    .map(|k| v_t[(k, j)].conj() * u[(row, k)].conj() / singular[k])
+                    .sum::<C>()
+                    / scales[j];
+                influence[i - first] = weight * e;
+            }
+            let mut estimate = influence.iter().map(|z| z.norm_sqr()).sum::<f64>();
+            for lag in 1..=bandwidth {
+                let covariance = influence[..influence.len() - lag]
+                    .iter()
+                    .zip(&influence[lag..])
+                    .map(|(a, b)| (*a * b.conj()).re)
+                    .sum::<f64>();
+                estimate += 2. * (1. - lag as f64 / (bandwidth + 1) as f64) * covariance;
+            }
+            estimate *= ntrain as f64 / (ntrain - ncol) as f64;
+            variance[j] = variance[j].max(estimate);
+        }
+    }
     let amplitude_snr_db: Vec<_> = amplitudes
         .iter()
         .zip(&variance)
@@ -479,6 +625,8 @@ pub fn cancel(
             confirmed,
             amplitude_snr_db,
             amplitude_shrinkage: shrinkage,
+            amplitude_white_variance: white_variance,
+            amplitude_covariance_variance: variance,
             reason: reason.into(),
             input_rms_over_noise: rms(y, &support) / noise,
             residual_rms_over_noise: residual,

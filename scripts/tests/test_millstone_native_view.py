@@ -53,6 +53,17 @@ class NativeView(unittest.TestCase):
                 module.export(historical,fits,output,public)
 
 class DebrisEvents(unittest.TestCase):
+    def test_strong_echo_does_not_confirm_a_neighbouring_weak_candidate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with h5py.File(pathlib.Path(tmp)/'source.h5','w') as h:
+                r=h.create_group('records/a');r['pulse_sample']=[1712534400123456]
+                store(r,'configuration_json',dict(lpi=dict(sample_rate_hz=1e6,science_pulse=[True])))
+                debris=r.create_group('debris')
+                store(debris,'diagnostics_json',[dict(accepted=True,applied=True,confirmed=True,
+                    amplitude_snr_db=[30.,9.,-10.],amplitude_shrinkage=[1.,.9,0.],
+                    detections=[dict(delay_samples=d,doppler_hz=0.) for d in [2000.,3000.,4000.]])])
+                self.assertEqual([e[2] for e in module.debris_events(r)],[0,1,3])
+
     def test_delay_units_status_and_no_partner_duplication(self):
         with tempfile.TemporaryDirectory() as tmp:
             with h5py.File(pathlib.Path(tmp)/'source.h5','w') as h:

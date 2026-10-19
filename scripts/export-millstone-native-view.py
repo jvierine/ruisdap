@@ -52,6 +52,11 @@ def debris_events(record):
         if shrinkage is not None:assert len(shrinkage) in [0,len(diagnostic['detections'])], 'Debris amplitude dimensions differ'
         for index,detection in enumerate(diagnostic['detections']):
             event_status=3 if diagnostic['accepted'] and shrinkage and shrinkage[index]==0 else status
+            # Joint pulse acceptance does not confirm every candidate. A weak
+            # amplitude must remain weak even alongside a strong fitted echo.
+            snr=diagnostic.get('amplitude_snr_db',[])
+            if event_status==0 and index<len(snr) and snr[index]<14:
+                event_status=1
             delay=detection['delay_samples'];doppler=detection['doppler_hz']
             assert np.isfinite(delay) and delay>=0 and np.isfinite(doppler),'Invalid debris coordinates'
             events.append((int(sample)/sr,delay/sr*299792.458/2,event_status,doppler))

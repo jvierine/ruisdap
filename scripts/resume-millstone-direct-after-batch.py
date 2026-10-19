@@ -14,7 +14,7 @@ state=properties()
 assert state.get('Result')=='exit-code' and state.get('ExecMainStatus')=='1',state
 log=(a.output/'2024-04-08/reduce.log').read_text()
 errors=[line for line in log.splitlines() if 'archive window ' in line]
-assert errors and all('detection overlaps background window' in line or 'output exists; use a new product version' in line for line in errors),errors
+assert errors and all('detection overlaps background window' in line or 'no positive background noise estimate' in line or 'output exists; use a new product version' in line for line in errors),errors
 print('Original batch finished; verifying completed hashes and resuming isolated window queues',flush=True)
 subprocess.run([sys.executable,'scripts/repair-millstone-background-windows.py','--root',str(a.output)],check=True)
 command=[sys.executable,'scripts/process-millstone-eclipse-direct.py','--output',str(a.output),'--resume']

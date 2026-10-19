@@ -376,6 +376,58 @@ real satellite echo remains accepted with a held-out RMS/background ratio 0.957.
 The reader tests also cover indices above 2^53, rational sample rates, incompatible
 properties and sparse compressed reads with cache reuse.
 
+### Independent pulse coverage and invalid receiver backgrounds
+
+`audit-millstone-source-coverage.py` independently reconstructs eligible pulses
+using upstream DigitalRF/DigitalMetadata readers, original antenna/power/code
+metadata and continuous RF block indices. It compares exact candidate and
+paired-science sample keys with every ten-second reduction audit. Full-day
+publication requires a verified complete-day HDF5 reference report. The auditor
+can resume verified chunks, checking the hashes of previous reduction audits;
+it reads no RF voltage samples and writes no RF representation. Synthetic tests
+exercise a real indexed RF gap, loss of its same-code partner, and rejection of
+a modified audit checkpoint.
+
+Flat recorded receiver backgrounds are explicit per-pulse quality failures.
+They produce an all-false usable mask, preserve the input voltage, and have
+undefined noise/validation ratios recorded as null. They do not supply receiver
+calibration statistics or abort unrelated windows. At the April 8 receive-gap
+boundary, 76 such pulses were checked against the original upstream RF reader;
+their background samples are actually constant in the recording. Ordinary coded
+and long-pulse control ACFs, variances and receiver gains remain bitwise equal.
+
+### Subtraction review and cancellation timing
+
+The current campaign subtraction remains experimental. Two complete matched
+integrations, using identical source pulse sets and fitting kernels, show median
+temperature changes below 0.3% over 250–500 km. In the separate 525–575 km check,
+median ion-temperature changes are 5–8%, and velocity changes reach 31 m/s.
+Parameter-boundary fits remain with subtraction both enabled and disabled.
+Neither branch is a ground-truth plasma measurement.
+
+`check_diffuse_null` synthesizes zero-mean Gaussian ion-line fluctuations from
+the native spectrum model with no coherent target. With a *forced* candidate,
+the legacy canceller accepted subtractions in 26/100 long-pulse and 22/100 coded
+trials at diffuse/receiver power ratio 0.1. This is a conditional-candidate
+stress test, not an end-to-end CFAR or real-archive false-alarm rate.
+Alternating sixteen-sample training/holdout blocks do not ensure independence
+for colored plasma scatter. An opt-in Bartlett HAC amplitude-variance prototype
+(`correlation_lag_s`, in seconds) reduces those counts to 8/100 for each family
+at a 250 µs bandwidth, but still falsely confirms some higher-power null cases.
+It remains disabled by default and in the campaign. Complete-day publication is
+held pending the detector/subtraction review. Weak amplitudes remain labeled
+weak in the viewer even when a different echo in the same pulse is strong.
+
+Cancellation interpolation now skips only identically zero transmit support
+and reuses the separable delay interpolation and Doppler phase grids. Regression
+tests compare every template output bit with the original numerical definition,
+including fractional shifts, noncircular edges and signed zeros.
+`benchmark_direct_cancellation` measures only cancellation, excluding archive I/O
+and LPI, and writes diagnostics, timing and output/mask hashes without voltages.
+Three repeated synthetic and real coded/long single-pulse cases on one allocated
+core showed approximately 30× kernel speedup with exact output and diagnostic
+equality. This is not a measured 30× speedup of the whole campaign pipeline.
+
 ### Incremental fits, legacy timing and debris diagnostics
 
 `stream-millstone-direct.py` fits completed integrations while archive reduction
@@ -438,3 +490,42 @@ pulses. Every reduction kernel is identified in the product/coverage ledger.
 Work counters include their manifest start/end interval, so bounded repairs
 cannot reset the full-day MPI queue. Earlier duplicate claims are rejected by
 output guards; checkpoint reuse verifies immutable product hashes.
+
+### 2026-10-20 coverage and residual checks
+
+The direct April 8 reduction passed the independent full-day metadata and RF
+block-index audit: 3,099,908 science pulses from 3,103,238 candidates. The
+reduction separately records 82 science pulses rejected in full for unusable
+background calibration. All reduced products are represented exactly once
+across 145 completed fit integrations. This establishes source coverage, not
+scientific validity of every fit. Complete-day publication remains held while
+the subtraction review is open; the controller proceeds with April 7 and 9.
+
+The external CFAR detector was also run unchanged on synthetic diffuse-only
+Gaussian ion-line returns. Thin-layer coded returns can produce candidates
+without coherent targets; distributing the same nominal return over a broad
+range profile greatly reduces this effect. These model-dependent tests do not
+measure the campaign's empirical false-alarm rate. Direct checks of four
+ten-second source windows found marginal excess RF power around 0.13–0.23 of
+receiver background near 300 km and about 0.01–0.04 near 550 km in selected
+no-seed pulses. Absence of catalogue seeds does not establish absence of debris.
+
+`check-millstone-residual-cfar.py` reconstructs recorded subtraction directly
+from the original RF, refined templates and recorded complex amplitudes in
+memory. It requires agreement with the native support RMS to relative 1e-9,
+then runs the unchanged detector on original and residual voltages. It writes
+only scalar QA, candidate coordinates and provenance in HDF5. In eight targeted
+windows selected for high counts of accepted or masked 525–575 km candidates,
+39 of 511 accepted subtractions retained a CFAR-level residual in that range.
+None of those residuals differed by more than 4 kHz from every fitted Doppler.
+Among 329 failed-validation/masked pulses, 133 retained residuals, including 24
+with that Doppler separation. None of 55 no-seed controls had a layer residual.
+These are targeted samples, not representative campaign fractions.
+
+The detector's range-only peak suppression can omit components within one
+pulse-length range neighbourhood. The native held-out check only tests the
+selected templates, so a small projection onto them does not prove an empty
+residual ambiguity surface. Neither finding justifies adding arbitrary
+residual candidates in production: such additions can also remove diffuse ISR.
+The `check_residual_candidates` example provides a bounded joint-fit experiment
+on the original source without changing production seeds or writing voltages.

@@ -117,6 +117,16 @@ def main():
             run([*mpi,str(reducer),'process-archive',str(plan)],day/'reduce.log')
             status(date+' verifying pulse coverage, gaps and reduced products')
             products,science,candidate,rows=audit_day(day,start,kernels)
+            status(date+' independently verifying original metadata and RF block coverage')
+            reference_report=day/'source-coverage-reference-v1.h5'
+            reference=[sys.executable,'scripts/audit-millstone-source-coverage.py','--campaign',str(a.output),'--date',date,'--report',str(reference_report)]
+            for root in a.root:reference+=['--root',str(root)]
+            if reference_report.exists():reference+=['--resume']
+            run(reference,day/'source-coverage.log')
+            with h5py.File(reference_report) as reference:
+                assert reference.attrs['verified'] and reference.attrs['complete_utc_day'],'Independent full-day pulse coverage is unproven'
+                assert reference.attrs['science_pulse_count']==len(science)
+                assert reference.attrs['candidate_pulse_count']==len(candidate)
             status(date+' fitting completed legacy 300 s integration windows on 128 cores')
             run([sys.executable,'scripts/stream-millstone-direct.py','--root',str(a.output),'--date',date,'--workers','128','--drain'],day/'fit.log')
             fits=day/('stream-fits-'+stream.FIT_SERIES);fit_files=sorted(fits.glob('fit-*.h5'));used=[]
@@ -151,6 +161,7 @@ def main():
                 analysis_note='Native DigitalRF analysis of all supported powered monostatic ZENITH coded and long pulses available on this day. 45 measured lags and historical range averaging; legacy 300 s maximum integration rule with shorter antenna-selected exposure. Missing RF is audited. Experimental CFAR-seeded amplitude subtraction; background-contaminated pulses are explicitly rejected. Finite-response, finite-Debye Rust fits; initial calibration transfers the reviewed April 8 reference. Physical velocity sign remains unverified.')
             atomic_json(staging/'manifest.json',manifest)
             shutil.copy2(day/'coverage.h5',staging/'coverage.h5');(staging/'coverage.h5').chmod(0o644)
+            shutil.copy2(reference_report,staging/'source-coverage-reference.h5');(staging/'source-coverage-reference.h5').chmod(0o644)
             staging.rename(destination)
             stream.register(date,destination,'native-direct-20261019','Rust · direct DigitalRF · 45 lags')
             stream.publish(a.output,date,context,fit_sha,complete=True)

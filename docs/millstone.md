@@ -536,3 +536,77 @@ amplitude SNR ranged from 11.9 to 24.0 dB under the existing white-noise
 uncertainty assumption. This demonstrates a possible fit improvement, not
 plasma preservation or a confirmed second object. Diffuse-null and injected
 target controls remain required before adopting this in campaign processing.
+
+The subsequent CFAR/native-cancellation control run contains 2,400 synthetic
+trials across coded/long pulses, thin/broad Gaussian diffuse layers, six diffuse
+power levels, and single/two-target injections. The native canceller receives
+voltages through anonymous pipes; neither RF voltages nor pulse packs are
+written. At nominal diffuse/receiver power 0.2, the coded thin-layer null
+produced nine accepted subtractions in fifty trials. With one genuine injected
+target, its paired real 10 microsecond ACF error was -18.7% of the diffuse
+reference before residual augmentation and -33.1% afterwards. The corresponding
+broad-layer coded single-target result was -4.6% with no augmentation. These
+are direct-voltage lag moments, not complete LPI inversions or measured
+campaign density errors. They reject automatic residual augmentation as a
+validated solution and retain the completed-day scientific hold.
+
+For fixed templates the amplitude stage is a linear projection, even if a
+coherent target really exists. If `Q = I - P`, then the remaining diffuse
+covariance is `Q R Q^H`; using the original unprojected plasma response can
+therefore bias the recovered parameters. Interleaved within-pulse training
+and validation samples do not provide independent plasma realizations. A
+small residual and a successful native validation flag do not remove this
+effect. Geometry refinement and candidate selection introduce further
+data-dependent effects beyond this fixed-template identity.
+
+The saved-amplitude phase diagnostic found normalized inter-pulse coherence
+about 0.93 in one targeted F-region coded track and 0.94–0.99 in two targeted
+550 km coded tracks. Each exceeded all 64 random-phase controls under the
+same frequency/chirp search. That is evidence of coherent structure, not an
+object identification, a resolved Doppler alias or a campaign false-alarm
+rate. Long-pulse endpoints lacked the required sixteen neighbouring pulses.
+It would be incorrect to identify every F-region candidate as diffuse plasma
+solely from its location.
+
+An independent-pulse amplitude control supplies the known injected geometry
+and aligned phase, estimates each pulse's amplitude from the other pulses,
+and records paired ACF changes. Independent groups, rather than pulses that
+share a training pool, are the bootstrap units. This isolates the projection
+effect but does not supply a deployable tracker: phase/geometry prediction,
+false-candidate control and full LPI/fit validation on actual observations are
+still required. Production subtraction settings remain unchanged.
+
+The oracle test completed 24 cases, each with eight independent groups of
+sixteen pulses. With fixed known geometry, same-pulse amplitude estimation had
+mean 10 microsecond ACF errors from -3.8% to -36.7% of the diffuse reference.
+Leave-one-pulse-out prediction changed these point estimates to +0.2% through
++3.7%; the bootstrap interval extrema across cases were -0.7% and +5.8%.
+This demonstrates removal of the negative projection effect under the stated
+oracle assumptions, with a remaining positive estimation-noise contribution.
+It does not validate phase tracking, candidate confirmation or full LPI fits
+on real observations.
+
+### Receiver calibration exclusions
+
+April 7's first direct reduction stopped at 21:20:40 UTC when the long-pulse
+injection measurement was below the receiver background. The calibration
+guard now distinguishes this measured failure from a numerical or unsupported
+layout error. It keeps the coded product and excludes only the uncalibratable
+long-pulse family, recording the original pulse keys, configuration, complete
+cancellation diagnostics and measured powers in the window audit. It does not
+invent or interpolate a gain. Unrelated windows continue.
+
+In that window, the filtered noise and injection powers were 216.0171 and
+145.4731 ADC-squared respectively, giving gain -0.0601911 ADC-squared/K.
+An independent upstream DigitalRF read and NumPy FIR/calibration replay
+reproduced the failure for 374 excluded long-pulse science records. The coded
+product's SHA256 stayed unchanged. Positive-gain arithmetic is unchanged, and
+an invalid injection-temperature configuration still raises an error.
+
+The source-coverage verifier compares the independently expected pulse set to
+the union of reduced science pulses and explicitly calibration-rejected
+pulses. It independently reconstructs every claimed calibration exclusion
+from original RF, including checks that valid calibration pulses were not
+silently omitted. Day products separately record readable, reduced and
+calibration-rejected pulse counts. A quality exclusion therefore remains
+visible without masquerading as a missing source recording or valid density.

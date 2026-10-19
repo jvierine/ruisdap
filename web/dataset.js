@@ -23,6 +23,7 @@ window.addEventListener('message',event=>{
  if(event.data?.type==='ruisdap-ready'){target.dataset.ready='true';document.body.dataset.readyMs=performance.now().toFixed(1);if(!target.hidden)el('dataset-status').textContent='';}
  if(event.data?.type==='ruisdap-error'&&!target.hidden)el('dataset-status').textContent='Unable to load measurements: '+event.data.message;
  if(event.data?.type==='ruisdap-height')target.style.height=Math.max(700,Math.min(100000,event.data.height))+'px';
+ if(event.data?.type==='ruisdap-analysis'&&canonical){const u=new URL(location.href);for(const k of ['analysis','time','range_m'])u.searchParams.set(k,event.data[k]);u.searchParams.delete('start');u.searchParams.delete('end');u.searchParams.set('view',active);location.assign(u);return;}
  if(event.data?.type==='ruisdap-time')for(const f of frames.values())if(f!==target)f.contentWindow.postMessage(event.data,location.origin);
 });
 try{
@@ -52,5 +53,6 @@ try{
    try{const r=await fetch(`api/catalog/jobs/${e.id}`,{method:'POST',headers:{Authorization:'Bearer '+el('dataset-key').value.trim()}});if(!r.ok)throw Error(await r.text());el('dataset-process-status').textContent='Queued. See Processing status.';}catch(e){el('dataset-process-status').textContent=e.message;}
   });
  }
+ if(canonical&&routes.plasma?.startsWith('millstone.html')){const u=new URL(routes.plasma,location.href);for(const key of ['analysis','time','range_m','start','end'])if(query.has(key))u.searchParams.set(key,query.get(key));routes.plasma=u.pathname+u.search;}
  const requestedView=(query.get('view')||'').replace(/\.+$/,'');show(['ion','plasma'].includes(requestedView)?requestedView:(routes.plasma?'plasma':'ion'));
 }catch(e){el('dataset-status').textContent=e.message;el('dataset-title').textContent='Dataset unavailable';}

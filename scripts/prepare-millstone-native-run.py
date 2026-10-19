@@ -7,9 +7,9 @@ import argparse,bisect,datetime as dt,hashlib,importlib.util,json
 from pathlib import Path
 import h5py,numpy as np
 spec=importlib.util.spec_from_file_location('pulse_io',Path(__file__).with_name('pack-millstone-pulses.py'));io=importlib.util.module_from_spec(spec);spec.loader.exec_module(io)
-p=argparse.ArgumentParser();p.add_argument('--root',type=Path,required=True);p.add_argument('--start',type=int,required=True);p.add_argument('--scan-seconds',type=int,default=600);p.add_argument('--jobs',type=int,default=128);p.add_argument('--output',type=Path,required=True);a=p.parse_args()
-if a.output.exists():raise ValueError('choose a new run directory')
-a.output.mkdir(parents=True);(a.output/'inputs').mkdir()
+p=argparse.ArgumentParser();p.add_argument('--root',type=Path,required=True);p.add_argument('--start',type=int,required=True);p.add_argument('--scan-seconds',type=int,default=600);p.add_argument('--jobs',type=int,default=128,help='Maximum jobs; zero selects all valid integrations');p.add_argument('--antenna',choices=['ZENITH','MISA','both'],default='both');p.add_argument('--output',type=Path,required=True);p.add_argument('--resume',action='store_true');a=p.parse_args()
+if a.output.exists()and not a.resume:raise ValueError('choose a new run directory, or explicitly resume prepared inputs')
+a.output.mkdir(parents=True,exist_ok=a.resume);(a.output/'inputs').mkdir(exist_ok=a.resume)
 def hour(t):return dt.datetime.fromtimestamp(t,dt.timezone.utc).strftime('%Y-%m-%dT%H-00-00')
 ants=[]
 for hdir in sorted({hour(t)for t in range(a.start-3600,a.start+a.scan_seconds+3600,3600)}):
@@ -25,7 +25,7 @@ def antenna(k):
  return r['rx_antenna'].decode(),r
 inputs=[];catalogues={};rejected=[];ndet=0
 for second in range(a.start,a.start+a.scan_seconds):
- if len(inputs)>=a.jobs:break
+ if a.jobs and len(inputs)>=a.jobs:break
  name=hour(second);idsfile=a.root/'metadata/id_metadata'/name/f'md@{second}.h5'
  if not idsfile.exists():continue
  with h5py.File(idsfile)as h:ids={int(k):int(g['sweepid'][()])for k,g in h.items()if 'sweepid'in g}
@@ -38,6 +38,7 @@ for second in range(a.start,a.start+a.scan_seconds):
  power=min(powers,key=lambda r:abs(r[0]-second))[1]
  # A job contains one antenna and one-second RF source; skip switching pulses.
  for ant,channel in [('ZENITH','zenith-l'),('MISA','misa-l')]:
+  if a.antenna!='both' and a.antenna!=ant:continue
   pt=power['zenith_power'if ant=='ZENITH'else'misa_power']
   if not np.isfinite(pt)or pt<400e3:continue
   keys=sorted(k for k,v in ids.items()if 1<=v<=32 and second*1000000<=k and k+10000<=(second+1)*1000000 and (antenna(k)or('',))[0]==ant)
@@ -49,6 +50,21 @@ for second in range(a.start,a.start+a.scan_seconds):
   if len(keys)<16:continue
   rf=a.root/'rf_data'/channel/name/f'rf@{second}.000.h5';tf=a.root/'rf_data/tx-h'/name/f'rf@{second}.000.h5'
   if not rf.exists()or not tf.exists():continue
+  out=a.output/'inputs'/f'{second}-{ant}.h5'
+  if a.resume and out.exists():
+   try:
+    with h5py.File(out) as ready:
+     c=json.loads(bytes(ready['configuration_json'][:]))
+     assert ready.attrs['receive_path']==str(rf) and ready.attrs['scope']
+     assert c['antenna']==ant and c['cancel_debris'] and np.array_equal(ready['pulse_sample'][:],keys)
+     assert ready['echo'].shape==ready['transmit'].shape==(len(keys),10000,2)
+     assert all(n+'_sha256'in ready.attrs for n in ['receive','transmit','id_metadata','power'])
+     count=len(ready['detections'])
+    inputs.append(str(out));ndet+=count
+    print(json.dumps(dict(job=len(inputs),second=second,antenna=ant,pulses=len(keys),detections=count,resumed=True)),flush=True)
+    continue
+   except (OSError,KeyError,AssertionError,ValueError):
+    out.rename(out.with_suffix('.incomplete.h5'))
   base,rx=io.rf(rf);tbase,txref=io.rf(tf)
   if base!=tbase:raise ValueError('RF clocks disagree')
   y=np.array([rx[k-base:k-base+10000]for k in keys]);transmit=np.zeros_like(y);transmit[:,76:624]=y[:,76:624]
@@ -77,7 +93,7 @@ for second in range(a.start,a.start+a.scan_seconds):
   inputs.append(str(out));ndet+=len(detections)
   print(json.dumps(dict(job=len(inputs),second=second,antenna=ant,pulses=len(keys),detections=len(detections))),flush=True)
 for h in catalogues.values():h.close()
-if len(inputs)<a.jobs:raise ValueError(f'only {len(inputs)} valid distinct integrations in requested scan')
+if a.jobs and len(inputs)<a.jobs:raise ValueError(f'only {len(inputs)} valid distinct integrations in requested scan')
 (a.output/'manifest.json').write_text(json.dumps(dict(inputs=inputs,output=str(a.output/'products'),live_directory=str(a.output/'live'))))
 (a.output/'single.json').write_text(json.dumps(dict(inputs=inputs[:1],output=str(a.output/'control'),live_directory=str(a.output/'control-live'))))
 print(json.dumps(dict(jobs=len(inputs),detections=ndet,manifest=str(a.output/'manifest.json'))))

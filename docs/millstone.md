@@ -202,3 +202,28 @@ logarithmic colour mapping. The browser fetches only the visible resolution,
 keeps at most twelve tiles, and exposes approximately 0.357 s profiles when
 zoomed in. Slice timing is assigned uniformly within recorded five-second
 bounds; pulse-level timestamps are not available in those products.
+
+## Viewing historical and native analyses
+
+The shared Millstone viewer now lists server-registered analyses in its Analysis
+selector. Historical opens the full UTC day; the native trial opens its available
+coverage. Switching preserves selected time and slant range. Both use the same
+Rustplotlib parameter maps, profiles and instrument diagnostics.
+
+`export-millstone-native-view.py` exports canonical native HDF5 fits into that
+viewer. Native Ne and its errors are already absolute and are not multiplied by
+the historical calibration again. Matching measured/model ACFs and component
+errors come from the exact fit integration; the displayed spectrum applies the
+same measured-lag DFT to data and model. The native negative-lag convention is
+conjugated for the shared positive-lag DFT. HDF5 downloads retain full covariance
+and processing metadata. Historical raw Ne and plasma spectra remain explicitly
+separate context. Calibration review editing continues in Historical.
+
+The four-profile trial is registered as `native-20261019`. A full-day ZENITH
+30-us-code run was launched separately with `process-millstone-full-day.py`:
+preparation scans all 24 hours with one reader per hour; reduction and fitting use 128
+MPI ranks on physical cores, with experimental CFAR-seeded subtraction enabled.
+It publishes `native-full-20261019` only after all eligible inputs reduce and fit
+successfully. This extends time coverage for the declared recipe, not support
+for other pulse modes or a MISA calibration. Failed processing does not publish
+a partially complete analysis, and the service has no automatic restart.

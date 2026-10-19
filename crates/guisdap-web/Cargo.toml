@@ -5,7 +5,7 @@ edition.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 [dependencies]
-rustplotlib-web = { git = "https://github.com/jvierine/rustplotlib", rev = "be50f14ce89d2778f2db32433e7d9d27c8f53896" }
+rustplotlib-web = { git = "https://github.com/jvierine/rustplotlib", rev = "10aebb491924e2286030894a3aa66148d364161e" }
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 guisdap-ion = { path = "../guisdap-ion" }
 guisdap-core = { path = "../guisdap-core" }

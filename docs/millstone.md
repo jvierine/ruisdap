@@ -145,8 +145,9 @@ status directory when their numeric user IDs differ.
   Kudeki–Milla Part I. The native theory also agrees with an independent
   implementation over 162 collisionless, unmagnetized Maxwellian cases.
 
-The whole-day native antenna/power/gap controller and exact parity with all
-legacy spectral averaging/rejection rules are not finished. Cancellation's
+The full-day driver covers the declared 16 × 30 microsecond ZENITH mode.
+Support for all other pulse modes and exact parity with all legacy spectral
+averaging/rejection rules remain unfinished. Cancellation's
 signal-loss and covariance effects still need end-to-end injections. The
 recalculation queue freezes reviewed EISCAT calibration revisions; a validated
 Millstone production refit recipe is not yet registered. These are not supplied
@@ -232,3 +233,11 @@ Explicit `--resume-products` verifies the frozen input SHA256, common-format
 schema and native executable identity before retaining completed products. The
 remaining inputs are distributed by descending CFAR-detection work estimate.
 Resume audits are HDF5; no completed waveform or ACF product is overwritten.
+
+The completed full-day 8 April run is registered as `native-full-20261019`: all
+5,540 eligible integrations produced ACFs, and 295 time buckets produced native
+fits, spanning 00:16:40–23:59:56 UTC. The viewer was checked against canonical
+HDF5 arrays and every input is represented once. Across 22,125 fitted range
+gates, 11,863 converged, 1,905 were low-information, 4,399 did not converge and
+3,958 reached parameter boundaries. These flags are retained; completion is not
+a claim that every gate is a usable fit or that cancellation bias is validated.

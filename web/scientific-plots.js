@@ -110,7 +110,7 @@ function drawCurve(p){const spec=p.spec,host=p.host,b=spec.bounds,v=p.viewport.b
  mathLabel(p,'y',mathAsset(spec.ylabel),spec.ylabel,18,rect[1]+rect[3]/2,true);
  if(spec.yaxes){
   p.extraAxes??=[];host.style.position='relative';
-  const legend=p.legend||host.appendChild(document.createElement('div'));p.legend=legend;legend.className='multi-axis-legend';legend.replaceChildren();Object.assign(legend.style,{left:rect[0]+'px',top:'0px'});
+  const legend=p.legend||host.appendChild(document.createElement('div'));p.legend=legend;legend.className='multi-axis-legend';legend.replaceChildren();Object.assign(legend.style,{left:rect[0]+'px',top:'0px',width:rect[2]+'px',zIndex:'2',rowGap:'0px',lineHeight:'16px'});
   spec.yaxes.forEach((axis,i)=>{
    let a=p.extraAxes[i];if(!a){const canvas=document.createElement('canvas');canvas.className='scientific-extra-axis';host.append(canvas);a={canvas,view:new SeriesView(canvas)};p.extraAxes[i]=a;}
    const right=i>=2,offset=right?(i-2)*80:-i*80,left=right?rect[0]+rect[2]+offset-16:rect[0]+offset-80;

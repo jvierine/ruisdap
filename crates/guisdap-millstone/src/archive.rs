@@ -26,7 +26,10 @@ pub struct Manifest {
     pub end_unix_s: u64,
     pub output: PathBuf,
     pub live_directory: Option<PathBuf>,
+    #[serde(default="default_cancellation")]
+    pub cancel_debris: bool,
 }
+fn default_cancellation()->bool{true}
 struct Stream {
     directories: Vec<PathBuf>,
     cadence: u64,
@@ -297,6 +300,7 @@ pub struct Archive {
     roots: Vec<PathBuf>,
     kernel_sha256:String,
     inherited_kernel_sha256:Option<String>,
+    cancel_debris:bool,
 }
 impl Archive {
     pub fn open(m: &Manifest) -> Result<Self> {
@@ -325,7 +329,7 @@ impl Archive {
         let inherited_file=m.output.parent().unwrap_or(&m.output).join("kernel.h5");
         let inherited_kernel_sha256=if inherited_file.is_file(){Some(text_attr(&File::open(inherited_file)?,"binary_sha256")?)}else{None};
         Ok(Self {
-            kernel_sha256,inherited_kernel_sha256,
+            kernel_sha256,inherited_kernel_sha256,cancel_debris:m.cancel_debris,
             rf,
             metadata: Metadata::open(&metadata_roots)?,
             roots: m.roots.clone(),
@@ -554,7 +558,7 @@ impl Archive {
                     background_column: true,
                 },
                 cancellation: Cancellation::default(),
-                cancel_debris: true,
+                cancel_debris: self.cancel_debris,
                 injection_temperature_k: 1172.,
                 range_doppler_fft: 1024,
                 range_doppler_samples: Vec::new(),
@@ -688,6 +692,19 @@ pub fn run_window(archive: &mut Archive, m: &Manifest, begin: u64) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cancellation_controls_are_opt_out_and_keep_source_selection() {
+        let base=json!({"roots":["original-rf"],"start_unix_s":100,"end_unix_s":110,"output":"reduced"});
+        let production:Manifest=serde_json::from_value(base.clone()).unwrap();
+        assert!(production.cancel_debris);
+        let mut control=base;
+        control["cancel_debris"]=json!(false);
+        let control:Manifest=serde_json::from_value(control).unwrap();
+        assert!(!control.cancel_debris);
+        assert_eq!(production.roots,control.roots);
+        assert_eq!(production.start_unix_s,control.start_unix_s);
+        assert_eq!(production.end_unix_s,control.end_unix_s);
+    }
     #[test]
     fn unchanged_instrument_state_has_no_arbitrary_age_limit() {
         let tmp = tempfile::tempdir().unwrap();

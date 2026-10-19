@@ -97,6 +97,7 @@ def main():
         print(phase,flush=True)
     def run(command,log):
         with log.open('a') as h:subprocess.run(command,env=env,stdout=h,stderr=h,check=True)
+    pending_review=[]
     for date in DATES:
         day=a.output/date;day.mkdir(exist_ok=True);(day/'live').mkdir(exist_ok=True)
         destination=PUBLIC/'data'/f'millstone-{date}-zenith-native-direct-20261019-v1'
@@ -128,6 +129,13 @@ def main():
                         assert digest(pathlib.Path(row['path']))==row['sha256'],'Fitted input changed'
                         used.append(row['path'])
             assert len(used)==len(set(used)) and set(used)==set(products),'Fit coverage differs from reduced products'
+            review=a.output/'scientific-review-pending.json'
+            if review.exists():
+                # Keep reducing the other campaign days while withholding the
+                # completed-day scientific claim and immutable publication.
+                pending_review.append(date)
+                status(date+' processed; completed-day publication held for scientific review')
+                continue
             status(date+' publishing verified complete day')
             context=REFERENCE if date=='2024-04-08' else PUBLIC/'data'/f'millstone-{date}-zenith-campaign-context-v1'
             staging=destination.with_name('.'+destination.name)
@@ -147,6 +155,9 @@ def main():
             stream.register(date,destination,'native-direct-20261019','Rust · direct DigitalRF · 45 lags')
             stream.publish(a.output,date,context,fit_sha,complete=True)
             print(date,'PUBLISHED',len(fit_files),'fits',len(science),'science pulses',flush=True)
-    status('all available ZENITH eclipse days complete',3,3)
+    if pending_review:
+        status('all available ZENITH days processed; scientific review pending: '+', '.join(pending_review),0,len(pending_review))
+    else:
+        status('all available ZENITH eclipse days complete',3,3)
 
 if __name__=='__main__':main()

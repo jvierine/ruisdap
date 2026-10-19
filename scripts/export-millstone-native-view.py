@@ -34,6 +34,7 @@ def debris_events(record):
     """
     if 'debris/diagnostics_json' not in record:return []
     config=read_json(record['configuration_json'])
+    if not config.get('cancel_debris',True):return []
     diagnostics=read_json(record['debris/diagnostics_json'])
     samples=record['pulse_sample'][:]
     science=config['lpi'].get('science_pulse') or [True]*len(samples)

@@ -15,12 +15,13 @@ struct Product {
 #[derive(Clone, Deserialize)]
 struct Entry {
     #[serde(default)]
+    dataset_url: Option<String>,
+    #[serde(default)]
     calibration: Option<Calibration>,
     id: String,
     date: String,
     experiment: String,
     radar: String,
-    sources: Vec<String>,
     hours: Vec<String>,
     products: Vec<Product>,
     supported: bool,
@@ -36,9 +37,6 @@ struct Calibration {
 struct Inventory {
     updated: String,
     scanning: bool,
-    directories: usize,
-    errors: usize,
-    skipped_at_depth: usize,
     sources: Vec<String>,
     experiments: Vec<Entry>,
 }
@@ -61,6 +59,9 @@ struct View {
     month: String,
     date: String,
     filter: String,
+    instrument: String,
+    date_from: String,
+    date_to: String,
     processed: String,
     newest: bool,
     page: usize,
@@ -95,9 +96,12 @@ fn select(id: &str) -> String {
     el(id).dyn_into::<HtmlSelectElement>().unwrap().value()
 }
 fn matches(v: &View, e: &Entry) -> bool {
-    format!("{} {} {}", e.date, e.experiment, e.radar)
-        .to_lowercase()
-        .contains(&v.filter.to_lowercase())
+    (v.instrument.is_empty() || e.radar == v.instrument)
+        && (v.date_from.is_empty() || e.date >= v.date_from)
+        && (v.date_to.is_empty() || e.date <= v.date_to)
+        && format!("{} {} {}", e.date, e.experiment, e.radar)
+            .to_lowercase()
+            .contains(&v.filter.to_lowercase())
         && match v.processed.as_str() {
             "processed" => processed(e),
             "unprocessed" => !processed(e),
@@ -165,7 +169,24 @@ fn render(v: &mut View) {
     let _ = el("list-mode").set_attribute("aria-pressed", if v.list { "true" } else { "false" });
     let _ =
         el("calendar-mode").set_attribute("aria-pressed", if v.list { "false" } else { "true" });
-    text("catalog-status",&format!("{} experiment-days · {} directories checked · {} · {} read errors · {} depth-limited directories. {}",v.inventory.experiments.len(),v.inventory.directories,if v.inventory.scanning{"Scanning archive"}else{"Scan complete"},v.inventory.errors,v.inventory.skipped_at_depth,v.inventory.updated));
+    text(
+        "catalog-status",
+        &format!(
+            "{} observation days · {} · updated {} UTC",
+            v.inventory.experiments.len(),
+            if v.inventory.scanning {
+                "updating inventory"
+            } else {
+                "inventory ready"
+            },
+            v.inventory
+                .updated
+                .get(..16)
+                .unwrap_or(&v.inventory.updated)
+                .replace('T', " ")
+        ),
+    );
+
     text("catalog-sources",&format!("Sources: {}. UTC dates from archive directory names; recordings are validated during processing.",v.inventory.sources.join(", ")));
     let Ok(first) = NaiveDate::parse_from_str(&format!("{}-01", v.month), "%Y-%m-%d") else {
         return;
@@ -196,7 +217,7 @@ fn render(v: &mut View) {
         "<p>No experiments found for this date and filter. Inventory may still be scanning.</p>"
             .into()
     } else {
-        entries.iter().map(|e|format!("<button class='experiment {}' data-experiment='{}'><strong>{}</strong><span>{} · {} hour directories · {} · {}</span></button>",if v.selected.as_deref()==Some(&e.id){"selected"}else{""},e.id,escape(&e.experiment),escape(&e.radar),e.hours.len(),escape(&e.sources.join(", ")),status(e))).collect::<String>()
+        entries.iter().map(|e|format!("<button class='experiment {}' data-experiment='{}'><strong>{}</strong><span>{} · {} hour directories · {} · {}</span></button>",if v.selected.as_deref()==Some(&e.id){"selected"}else{""},e.id,escape(&e.experiment),escape(&e.radar),e.hours.len(),"recordings available",status(e))).collect::<String>()
     };
     el("experiments").set_inner_html(&html);
     let Some(e) = v
@@ -214,7 +235,7 @@ fn render(v: &mut View) {
         let products: Vec<_> = e
             .products
             .iter()
-            .filter(|p| p.label.to_lowercase().contains(kind))
+            .filter(|p| p.label.to_lowercase().starts_with(&format!("{kind}-line")))
             .collect();
         if products.is_empty() {
             html.push_str("<tr><td colspan='3'>No published products</td></tr>");
@@ -228,7 +249,11 @@ fn render(v: &mut View) {
                 } else {
                     "Processing / partial"
                 },
-                escape(&p.link)
+                escape(&if p.link.starts_with("./?") {
+                    p.link.replacen("./?", "plasma.html?", 1)
+                } else {
+                    p.link.clone()
+                })
             ));
         }
         html.push_str("</tbody></table></div>");
@@ -274,7 +299,10 @@ async fn post(path: &str) -> Result<(), JsValue> {
 }
 #[wasm_bindgen]
 pub async fn start_catalog() -> Result<(), JsValue> {
-    let inventory: Inventory = json("catalog/catalog.json").await?;
+    crate::navigation::setup()?;
+    let mut inventory: Inventory = json("catalog/catalog.json").await?;
+    merge_observations(&mut inventory).await;
+    merge_days(&mut inventory).await;
     let date = inventory
         .experiments
         .iter()
@@ -287,6 +315,9 @@ pub async fn start_catalog() -> Result<(), JsValue> {
         date,
         inventory,
         filter: String::new(),
+        instrument: String::new(),
+        date_from: String::new(),
+        date_to: String::new(),
         processed: "all".into(),
         newest: true,
         page: 0,
@@ -296,6 +327,20 @@ pub async fn start_catalog() -> Result<(), JsValue> {
         tab: "ion".into(),
     }));
     input("month").set_value(&state.borrow().month);
+    let instruments: std::collections::BTreeSet<_> = state
+        .borrow()
+        .inventory
+        .experiments
+        .iter()
+        .map(|e| e.radar.clone())
+        .collect();
+    el("instrument-filter").set_inner_html(&format!(
+        "<option value=''>All instruments</option>{}",
+        instruments
+            .iter()
+            .map(|s| format!("<option>{}</option>", escape(s)))
+            .collect::<String>()
+    ));
     let months: std::collections::BTreeSet<_> = state
         .borrow()
         .inventory
@@ -318,6 +363,9 @@ pub async fn start_catalog() -> Result<(), JsValue> {
     }
     for id in [
         "month",
+        "instrument-filter",
+        "date-from",
+        "date-to",
         "filter",
         "available-months",
         "processed-filter",
@@ -327,7 +375,17 @@ pub async fn start_catalog() -> Result<(), JsValue> {
         let st = state.clone();
         let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
             let mut v = st.borrow_mut();
-            if id == "filter" {
+            if id == "instrument-filter" {
+                v.instrument = select(id);
+                v.page = 0;
+                v.selected = None;
+            } else if id == "date-from" {
+                v.date_from = input(id).value();
+                v.page = 0;
+            } else if id == "date-to" {
+                v.date_to = input(id).value();
+                v.page = 0;
+            } else if id == "filter" {
                 v.filter = input(id).value();
                 v.page = 0;
                 v.selected = None;
@@ -379,17 +437,26 @@ pub async fn start_catalog() -> Result<(), JsValue> {
             render(&mut v);
         }
         if let Some(id) = button.get_attribute("data-experiment") {
-            let mut v = st.borrow_mut();
+            let v = st.borrow();
             if let Some(e) = v.inventory.experiments.iter().find(|e| e.id == id) {
-                let date = e.date.clone();
-                v.month = date[..7].into();
-                v.date = date;
-                input("month").set_value(&v.month);
+                if let Some(url) = &e.dataset_url {
+                    let _ = web_sys::window().unwrap().location().set_href(url);
+                    return;
+                }
+                let query = if e
+                    .products
+                    .iter()
+                    .any(|p| p.link.starts_with("observations.html"))
+                {
+                    format!("observation={}", e.id)
+                } else {
+                    format!("experiment={}", e.id)
+                };
+                let _ = web_sys::window()
+                    .unwrap()
+                    .location()
+                    .set_href(&format!("dataset.html?{query}"));
             }
-            v.selected = Some(id);
-            v.tab = "ion".into();
-            render(&mut v);
-            el("experiment-detail").scroll_into_view();
         }
         if let Some(kind) = button.get_attribute("data-product-tab") {
             let mut v = st.borrow_mut();
@@ -447,11 +514,17 @@ pub async fn start_catalog() -> Result<(), JsValue> {
     cb.forget();
     let cb = Closure::<dyn FnMut()>::new(move || {
         let st = state.clone();
+        if doc().hidden() {
+            return;
+        }
         spawn_local(async move {
             let _ = queue().await;
             if let Ok(inv) = json::<Inventory>("catalog/catalog.json").await {
                 let changed = inv.updated != st.borrow().inventory.updated;
                 if changed {
+                    let mut inv = inv;
+                    merge_observations(&mut inv).await;
+                    merge_days(&mut inv).await;
                     st.borrow_mut().inventory = inv;
                     let months: std::collections::BTreeSet<_> = st
                         .borrow()
@@ -480,4 +553,102 @@ pub async fn start_catalog() -> Result<(), JsValue> {
         )?;
     cb.forget();
     Ok(())
+}
+
+/// Canonical HDF5 exports join legacy archive discovery in one instrument/date
+/// browser. Their per-record grids remain separate in the dataset viewer.
+async fn merge_observations(inventory: &mut Inventory) {
+    #[derive(Deserialize)]
+    struct Config {
+        indexes: Vec<String>,
+    }
+    #[derive(Deserialize)]
+    struct Index {
+        records: Vec<Record>,
+    }
+    #[derive(Deserialize)]
+    struct Record {
+        id: String,
+        station: String,
+        antenna: String,
+        start_unix_s: f64,
+        has_spectra: bool,
+        has_fit: bool,
+    }
+    let Ok(config) = json::<Config>("observations-config.json").await else {
+        return;
+    };
+    let mut groups = std::collections::BTreeMap::<(String, String, String), Vec<Record>>::new();
+    for index in config.indexes {
+        if let Ok(index) = json::<Index>(&index).await {
+            for r in index.records {
+                let date = js_sys::Date::new(&JsValue::from_f64(r.start_unix_s * 1000.))
+                    .to_iso_string()
+                    .as_string()
+                    .unwrap_or_default()[..10]
+                    .to_string();
+                if r.station.starts_with("EISCAT")
+                    && inventory
+                        .experiments
+                        .iter()
+                        .any(|e| e.date == date && e.radar.contains("uhf"))
+                {
+                    continue;
+                }
+                groups
+                    .entry((date, r.station.clone(), r.antenna.clone()))
+                    .or_default()
+                    .push(r);
+            }
+        }
+    }
+    for ((date, station, antenna), records) in groups {
+        let id = records[0].id.clone();
+        let mut products = Vec::new();
+        if let Some(r) = records.iter().find(|r| r.has_spectra) {
+            products.push(Product {
+                label: "Plasma-line measurements and calibration".into(),
+                link: format!("observations.html?record={}&view=plasma", r.id),
+                complete: true,
+            });
+        }
+        if let Some(r) = records.iter().find(|r| r.has_fit) {
+            products.push(Product {
+                label: "Ion-line fitted profiles".into(),
+                link: format!("observations.html?record={}&view=ion", r.id),
+                complete: true,
+            });
+        }
+        inventory.experiments.push(Entry {
+            dataset_url: None,
+            id,
+            date,
+            experiment: format!("{station} observations"),
+            radar: format!("{station} · {antenna}"),
+            hours: records
+                .iter()
+                .map(|r| {
+                    let t = js_sys::Date::new(&JsValue::from_f64(r.start_unix_s * 1000.))
+                        .to_iso_string()
+                        .as_string()
+                        .unwrap_or_default();
+                    format!("{}:00", &t[11..13])
+                })
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect(),
+            products,
+            supported: false,
+            calibration: None,
+        });
+    }
+}
+
+async fn merge_days(inventory: &mut Inventory) {
+    if let Ok(days) = json::<Vec<Entry>>("millstone-datasets.json").await {
+        inventory
+            .experiments
+            .retain(|e| !e.radar.starts_with("Millstone Hill"));
+        inventory.experiments.extend(days);
+    }
 }

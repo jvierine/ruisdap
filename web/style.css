@@ -20,3 +20,12 @@ main{overflow-anchor:none}.scrubber{overflow-anchor:none}
 @media(max-width:850px){.animation-grid{grid-template-columns:1fr}}
 
 .experiment-tabs{display:flex;gap:8px;margin:16px 0}.experiment-tabs>a{padding:10px 20px;border:1px solid #405461;border-radius:5px;color:#d9e4ec;text-decoration:none}.experiment-tabs>a[aria-current=page]{background:#233a48;border-color:#e6b751;color:#fff}
+/* One primary navigation, followed by dataset-local plasma/ion tabs. */
+.primary-nav{display:flex;gap:22px;margin:0;margin-left:30px;font-size:14px}.primary-nav a{color:var(--muted);text-decoration:none;padding:13px 0;border-bottom:2px solid transparent}.primary-nav a[aria-current=page]{color:var(--text);border-color:var(--cyan)}.primary-nav a:hover{color:var(--cyan)}header{height:58px}.experiment-tabs{margin:16px 0 22px}.experiment-tabs>a{padding:8px 18px}.fit-nav:empty{display:none}a{color:var(--cyan)}[hidden]{display:none!important}svg foreignObject canvas{border:0;box-shadow:none}.observation-layout.ion-only{grid-template-columns:minmax(300px,800px)}.observation-layout.ion-only #observation-plasma-panel{display:none}@media(max-width:650px){.primary-nav{margin-left:auto;gap:16px;font-size:12px}header{gap:10px}.brand{font-size:17px}}
+/* Same Palatino/Pagella family as Rustplotlib's default mathpazo preamble. */
+@font-face{font-family:RustplotlibPagella;src:url('vendor/fonts/texgyrepagella-regular.otf') format('opentype');font-display:swap;font-style:normal;font-weight:400}
+@font-face{font-family:RustplotlibPagella;src:url('vendor/fonts/texgyrepagella-italic.otf') format('opentype');font-display:swap;font-style:italic;font-weight:400}
+svg text,.plot-title,.y-label,.y-ticks,.x-axis,.scale,.observation-axis{font-family:RustplotlibPagella,Palatino,serif!important;font-weight:400}
+.plot-title{font-size:16px}.plot-title span{font-size:14px}.y-label,.y-ticks,.x-axis,.scale,.observation-axis{font-size:14px}
+.dataset-embedded header,.dataset-embedded .experiment-tabs,.dataset-embedded footer{display:none!important}
+.dataset-embedded main{padding-top:6px}.dataset-tabs{display:flex;gap:8px;margin:20px 0}.dataset-tabs button[aria-pressed=true]{border-color:var(--cyan);background:#233a48}.dataset-frame{display:block;width:100%;border:0;min-height:700px;background:var(--bg)}.dataset-tabs button{padding:10px 24px}.dataset-title{display:flex;gap:15px;align-items:baseline;flex-wrap:wrap}

@@ -1,0 +1,37 @@
+/* RUISDAP uses a white scientific workspace and Rustplotlib's default type. */
+:root{color-scheme:light;--bg:#fff;--panel:#fff;--line:#d4dde2;--text:#243b47;--muted:#536b79;--cyan:#236b8e;--amber:#986327}
+body,header,main,.dataset-frame{background:#fff;color:var(--text)}
+button,input,select,textarea{color:var(--text);background:#fff;border-color:#bccbd3}
+button:hover{background:#edf3f6}button[aria-pressed=true],.dataset-tabs button[aria-pressed=true],.experiment-tabs>a[aria-current=page]{background:#e7f0f5;color:#164f6c;border-color:#236b8e}
+.plot,.metrics,.day,.selected-time,.scrubber,#fit-settings,#fit-colors{background:#fff;color:var(--text);border-color:var(--line);box-shadow:none}
+.settings-toolbar{background:#eef3f6;border-color:var(--line)}
+.settings-body input,.zoom-controls input,.settings-body select{background:#fff;color:var(--text);border-color:#bccbd3}
+.notice{background:#faf7ef;color:#654d2c;border-color:#bd965e}
+.caption,.runtime,small,.metrics small,.header-note,footer{color:var(--muted)}
+.selected-row,.day.selected{background:#e7f0f5}.day{background:#fff;color:var(--text)}
+svg text{fill:#314858}.plot-title,.y-label,.y-ticks,.x-axis,.scale{color:#314858}
+svg [stroke="#233c4c"],svg [stroke="#293d4c"],svg [stroke="#293743"]{stroke:#d6dfe4}
+canvas{background:#fff}.scientific-field{padding:14px 0}.selected-time{background:#fffffff5!important}
+.field-x{position:relative;height:30px;display:block!important;overflow:visible}
+.field-x span{position:absolute;top:0;white-space:nowrap;transform:translateX(-50%)}
+
+/* A single scientific plot layout is used by every instrument. */
+.parameter-row{padding:12px 0;margin:8px 0;border:0}.parameter-row>.plot-title{display:flex!important;padding-left:76px}
+.scientific-map h3{font:20px RustplotlibPagella,Palatino,serif;margin:4px 0 4px 76px;color:#314858}
+.ion-raster{position:relative;width:100%;height:270px;aspect-ratio:auto;background:#fff}
+.ion-raster>canvas{position:absolute;left:76px;top:22px;width:calc(100% - 208px);height:calc(100% - 80px);border-radius:0;touch-action:none}
+.ion-raster .scientific-axes,.ion-raster .scientific-bar-axes{position:absolute!important;inset:0;width:100%;height:100%;pointer-events:none;background:transparent}
+.ion-raster .scientific-bar{position:absolute;border:0;pointer-events:none}
+.ion-raster .scientific-axes{z-index:0}.ion-raster>canvas:first-child{z-index:1}.ion-axes{pointer-events:none}
+.ion-raster canvas[id$=-quality]{z-index:2;background:transparent}.ion-colorbar-hit{left:auto!important;right:0!important;top:22px!important;width:110px!important;height:calc(100% - 80px)!important}
+.ion-cursor,.ion-selection,.plot-markers{position:absolute;inset:0;pointer-events:none;z-index:3}
+.fit-selection-cursor{position:absolute;border-left:1px solid #986327;pointer-events:none}.fit-selection-cursor span{position:absolute;left:-5px;width:10px;border-top:2px solid #986327}
+.scientific-cursor{position:absolute;border-left:1px solid #986327;pointer-events:none;z-index:3}
+.cal-marker{position:absolute;transform:translate(-50%,-50%);background:#fff9;color:#986327;border:0;border-radius:50%;font-size:22px;line-height:1;padding:0;pointer-events:auto;cursor:pointer}
+.shared-colour-controls{display:flex;flex-wrap:wrap;gap:20px;align-items:center;margin:0 24px 18px 76px}
+.shared-colour-controls label{display:grid;grid-template-columns:auto minmax(90px,160px) 75px;align-items:center;gap:8px;font-size:12px}.shared-colour-controls input{margin:0}.shared-colour-controls output{font-variant-numeric:tabular-nums}
+.scientific-curve{display:block;width:100%;height:300px;background:white;touch-action:none}.fit-grid{grid-template-columns:repeat(auto-fit,minmax(290px,1fr))}.acf-grid{grid-template-columns:repeat(auto-fit,minmax(340px,1fr))}
+.plot .caption{color:#536b79}.selected-range-controls{display:grid;grid-template-columns:2fr 1fr;gap:24px}.selected-range-controls label{display:block}.selected-range-controls output{float:right;font-variant-numeric:tabular-nums}
+@media(max-width:700px){.shared-colour-controls{margin-left:76px;gap:8px}.shared-colour-controls label{grid-template-columns:110px 110px 70px}.selected-range-controls{grid-template-columns:1fr}.acf-grid{grid-template-columns:1fr}}
+
+.legacy-plasma .axis-chart{display:block}.legacy-plasma .axis-chart>.y-label,.legacy-plasma .y-ticks,.legacy-plasma .x-axis,.legacy-plasma .scale{display:none}.legacy-plasma .plot{padding:14px 0}.legacy-plasma .plot-title{padding-left:76px}.legacy-plasma #profile{position:relative}.scientific-heading{font:20px RustplotlibPagella,Palatino,serif;color:#314858}.individual-plasma .ion-raster{height:380px}

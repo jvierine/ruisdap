@@ -3,14 +3,16 @@
 mod calibration;
 mod catalog;
 mod ion;
+mod live;
+mod navigation;
+mod observation;
+mod plotting;
 use guisdap_core::{merge_bands, native_spectra};
 use serde::Deserialize;
 use std::{cell::RefCell, rc::Rc};
 use wasm_bindgen::{prelude::*, JsCast};
 use wasm_bindgen_futures::{spawn_local, JsFuture};
-use web_sys::{
-    HtmlCanvasElement, HtmlInputElement, HtmlSelectElement, WebGl2RenderingContext as Gl,
-};
+use web_sys::{HtmlInputElement, HtmlSelectElement};
 #[derive(Deserialize)]
 struct Config {
     data_root: String,
@@ -169,22 +171,11 @@ fn percentile(v: &[f32], p: f64) -> f32 {
         .map(|x| x.abs())
         .filter(|x| x.is_finite())
         .collect();
-    a.sort_by(f32::total_cmp);
-    a.get(((a.len().saturating_sub(1)) as f64 * p) as usize)
-        .copied()
-        .unwrap_or(1.)
-        .max(1e-12)
-}
-fn shader(gl: &Gl, kind: u32, src: &str) -> Result<web_sys::WebGlShader, JsValue> {
-    let s = gl
-        .create_shader(kind)
-        .ok_or_else(|| error("WebGL shader allocation"))?;
-    gl.shader_source(&s, src);
-    gl.compile_shader(&s);
-    if gl.get_shader_parameter(&s, Gl::COMPILE_STATUS).as_bool() != Some(true) {
-        return Err(error(gl.get_shader_info_log(&s).unwrap_or_default()));
+    if a.is_empty() {
+        return 1.;
     }
-    Ok(s)
+    let index = ((a.len() - 1) as f64 * p) as usize;
+    (*a.select_nth_unstable_by(index, f32::total_cmp).1).max(1e-12)
 }
 fn draw(
     id: &str,
@@ -194,118 +185,38 @@ fn draw(
     p: f64,
     cursor: Option<f32>,
     scale: (Option<f32>, bool),
+    bounds: [f64; 4],
 ) -> Result<(), JsValue> {
     if v.len() != width * height || width == 0 || height == 0 {
-        return Err(error(format!("invalid texture {id}")));
+        return Err(error("invalid field dimensions"));
     }
-    let (fixed_limit, positive) = scale;
-    let canvas: HtmlCanvasElement = el(id).dyn_into()?;
-    let gl: Gl = canvas
-        .get_context("webgl2")?
-        .ok_or_else(|| error("WebGL2 is required"))?
-        .dyn_into()?;
-    let vert=shader(&gl,Gl::VERTEX_SHADER,"#version 300 es\nprecision highp float;out vec2 uv;void main(){vec2 p=vec2(float((gl_VertexID<<1)&2),float(gl_VertexID&2));uv=p;gl_Position=vec4(p*2.0-1.0,0,1);}")?;
-    let frag = shader(
-        &gl,
-        Gl::FRAGMENT_SHADER,
-        r#"#version 300 es
- precision highp float;in vec2 uv;out vec4 color;uniform sampler2D field;uniform float lim;uniform float cursor;uniform float positive;uniform float logpower;
- const vec3 palette[16]=vec3[16](
-vec3(0.050383,0.029803,0.527975),
-vec3(0.200445,0.017902,0.593364),
-vec3(0.312543,0.008239,0.635700),
-vec3(0.417642,0.000564,0.658390),
-vec3(0.517933,0.021563,0.654109),
-vec3(0.610667,0.090204,0.619951),
-vec3(0.692840,0.165141,0.564522),
-vec3(0.764193,0.240396,0.502126),
-vec3(0.826588,0.315714,0.441316),
-vec3(0.881443,0.392529,0.383229),
-vec3(0.928329,0.472975,0.326067),
-vec3(0.965024,0.559118,0.268513),
-vec3(0.988260,0.652325,0.211364),
-vec3(0.994141,0.753137,0.161404),
-vec3(0.977995,0.861432,0.142808),
-vec3(0.940015,0.975158,0.131326));
- void main(){float raw=texture(field,uv).r;
- float z=raw/lim*8.0;float q=sign(z)*log(abs(z)+sqrt(z*z+1.0))/2.77647;
- float t=clamp(positive>0.5?q:0.5+0.5*q,0.0,1.0);
- if(logpower>0.5)t=clamp((log(max(raw,1e8))/log(10.0)-8.0)/5.0,0.0,1.0);
- float pos=t*15.0;int j=min(int(floor(pos)),14);vec3 c=mix(palette[j],palette[j+1],pos-float(j));
- if(isnan(raw)||(logpower>0.5&&raw<=0.0))c=vec3(.035,.070,.10);
- if(cursor>=0.0&&abs(uv.x-cursor)<.0014)c=mix(c,vec3(1.,1.,1.),.75);color=vec4(c,1.);}
- "#,
-    )?;
-    let program = gl
-        .create_program()
-        .ok_or_else(|| error("WebGL program allocation"))?;
-    gl.attach_shader(&program, &vert);
-    gl.attach_shader(&program, &frag);
-    gl.link_program(&program);
-    if gl
-        .get_program_parameter(&program, Gl::LINK_STATUS)
-        .as_bool()
-        != Some(true)
-    {
-        return Err(error(gl.get_program_info_log(&program).unwrap_or_default()));
-    }
-    gl.use_program(Some(&program));
-    let texture = gl
-        .create_texture()
-        .ok_or_else(|| error("WebGL texture allocation"))?;
-    gl.bind_texture(Gl::TEXTURE_2D, Some(&texture));
-    gl.tex_parameteri(Gl::TEXTURE_2D, Gl::TEXTURE_MIN_FILTER, Gl::NEAREST as i32);
-    gl.tex_parameteri(Gl::TEXTURE_2D, Gl::TEXTURE_MAG_FILTER, Gl::NEAREST as i32);
-    gl.tex_parameteri(Gl::TEXTURE_2D, Gl::TEXTURE_WRAP_S, Gl::CLAMP_TO_EDGE as i32);
-    gl.tex_parameteri(Gl::TEXTURE_2D, Gl::TEXTURE_WRAP_T, Gl::CLAMP_TO_EDGE as i32);
-    let a = js_sys::Float32Array::from(v);
-    gl.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_array_buffer_view(
-        Gl::TEXTURE_2D,
-        0,
-        Gl::R32F as i32,
-        width as i32,
-        height as i32,
-        0,
-        Gl::RED,
-        Gl::FLOAT,
-        Some(&a),
-    )?;
-    let limit = fixed_limit.unwrap_or_else(|| percentile(v, p));
-    gl.uniform1f(gl.get_uniform_location(&program, "lim").as_ref(), limit);
-    gl.uniform1f(
-        gl.get_uniform_location(&program, "logpower").as_ref(),
-        if id == "power" { 1. } else { 0. },
-    );
-    gl.uniform1f(
-        gl.get_uniform_location(&program, "positive").as_ref(),
-        if positive { 1. } else { 0. },
-    );
-    gl.uniform1f(
-        gl.get_uniform_location(&program, "cursor").as_ref(),
-        cursor.unwrap_or(-1.),
-    );
-    gl.viewport(0, 0, canvas.width() as i32, canvas.height() as i32);
-    gl.draw_arrays(Gl::TRIANGLES, 0, 3);
-    gl.delete_texture(Some(&texture));
-    gl.delete_program(Some(&program));
-    gl.delete_shader(Some(&vert));
-    gl.delete_shader(Some(&frag));
-    if gl.get_error() != Gl::NO_ERROR {
-        return Err(error(format!("WebGL rendering error: {id}")));
-    }
-    if id == "power" {
-        el("power-scale").set_inner_html("<span>10⁸</span><span class='colorbar' aria-label='Plasma color scale'></span><span>10¹³ m⁻³</span><span>log · fixed; dark = nonpositive</span>");
-        return Ok(());
-    }
-    let low = if positive { 0. } else { -limit };
-    let units = if id == "power" {
-        "m⁻³"
+    let limit = scale.0.unwrap_or_else(|| percentile(v, p));
+    let positive = scale.1;
+    let limits = if id == "power" {
+        [1e8, 1e13]
+    } else if positive {
+        [0., limit as f64]
     } else {
-        "relative spectral units"
+        [-(limit as f64), limit as f64]
     };
-    el(&format!("{id}-scale")).set_inner_html(&format!("<span>{low:.2e}</span><span class='colorbar' aria-label='Plasma color scale'></span><span>{limit:.2e} {units}</span><span>asinh · fixed during playback</span>"));
+    plotting::shared_field(
+        id,
+        v,
+        width,
+        height,
+        &serde_json::json!({"bounds":bounds,"limits":limits,"mode":if id=="power"{1}else{2},"normWidth":limit as f64/8.,"palette":if !positive{0}else{1},"time":id!="decoded","external_navigation":true,"xlabel":"Frequency offset / MHz","ylabel":if id.starts_with("broad"){"Frequency offset / MHz"}else{"Altitude / km"}}),
+    )?;
+    let canvas = el(id);
+    let cursor_id = format!("{id}-time-cursor");
+    if doc().get_element_by_id(&cursor_id).is_none() {
+        let marker = doc().create_element("div")?;
+        marker.set_id(&cursor_id);
+        canvas.parent_element().unwrap().append_child(&marker)?;
+    }
+    el(&cursor_id).set_attribute("style",&format!("position:absolute;z-index:3;top:22px;bottom:58px;left:calc(76px + (100% - 208px)*{});border-left:1px solid #986327;pointer-events:none;display:{}",cursor.unwrap_or(0.),if cursor.is_some_and(|v|(0. ..=1.).contains(&v)){"block"}else{"none"}))?;
     Ok(())
 }
+
 fn overview(a: &App) -> Result<(), JsValue> {
     let n = a.m.frames.len();
     let frame = &a.m.frames[a.selected];
@@ -406,6 +317,12 @@ fn overview(a: &App) -> Result<(), JsValue> {
             a.percentile,
             cursor,
             (Some(shared_limit), a.raw_view),
+            [
+                a.view_start,
+                a.view_end,
+                (low + first as f64 * 25000.) / 1e6,
+                (low + last as f64 * 25000.) / 1e6,
+            ],
         )?;
         text(
             &format!("gate-altitude{gate}"),
@@ -449,6 +366,12 @@ fn overview(a: &App) -> Result<(), JsValue> {
         a.percentile,
         cursor,
         (Some(1e13), true),
+        [
+            a.view_start,
+            a.view_end,
+            altitude(a.m.ion_range_km[indices[0]], elevation),
+            altitude(a.m.ion_range_km[*indices.last().unwrap()], elevation),
+        ],
     )?;
     let low = altitude(a.m.ion_range_km[indices[0]] - shift, elevation);
     let high = altitude(
@@ -481,6 +404,39 @@ fn overview(a: &App) -> Result<(), JsValue> {
         }
     }
     el("power-ticks").set_inner_html(&ticks);
+    overview_selection(a)
+}
+fn overview_selection(a: &App) -> Result<(), JsValue> {
+    let frame = &a.m.frames[a.selected];
+    let cursor =
+        ((frame.start_unix + frame.end_unix) / 2. - a.view_start) / (a.view_end - a.view_start);
+    for id in ["broad0", "broad1", "broad2", "broad3", "power"] {
+        if let Some(marker) = doc().get_element_by_id(&format!("{id}-time-cursor")) {
+            marker.set_attribute("style", &format!("position:absolute;top:0;bottom:0;left:{}%;border-left:1px solid white;pointer-events:none;display:{}", cursor*100., if (0. ..=1.).contains(&cursor) {"block"} else {"none"}))?;
+        }
+    }
+    let bounds = [[47., 221.], [128., 302.], [209., 383.], [290., 464.]];
+    for (gate, range) in bounds.iter().enumerate() {
+        text(
+            &format!("gate-altitude{gate}"),
+            &format!(
+                "{:.0}–{:.0} km altitude · broad gate {}",
+                altitude(range[0], frame.elevation_deg),
+                altitude(range[1], frame.elevation_deg),
+                gate + 1
+            ),
+        );
+    }
+    let indices: Vec<_> =
+        a.m.ion_range_km
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &r)| {
+                (a.profile_altitude[0]..=a.profile_altitude[1])
+                    .contains(&altitude(r, frame.elevation_deg))
+                    .then_some(i)
+            })
+            .collect();
     profile(a, &indices);
     Ok(())
 }
@@ -489,34 +445,10 @@ fn profile(a: &App, indices: &[usize]) {
     let f = &a.m.frames[a.selected];
     let [bottom, top] = a.profile_altitude;
     let [xmin, xmax] = a.profile_power;
-    let x = |v: f64| {
-        52. + 280. * (v.max(xmin).min(xmax).log10() - xmin.log10()) / (xmax / xmin).log10()
-    };
-    let y = |h: f64| 310. - 280. * (h - bottom) / (top - bottom);
-    let mut svg=String::from("<svg preserveAspectRatio='none' viewBox='0 0 360 360' role='img' aria-label='Signed 10 microsecond lag raw electron density versus response-centroid altitude, logarithmic scale 10^8 to 10^13 per cubic metre, with one sigma uncertainty'><g font-family='monospace' font-size='10' fill='#8b9aa8'>");
-    let tick = (((top - bottom) / 7. / 5.).ceil() * 5.).max(1.) as i32;
-    for h in
-        ((bottom / tick as f64).ceil() as i32 * tick..=top.floor() as i32).step_by(tick as usize)
-    {
-        let yy = y(h as f64);
-        if true {
-            svg += &format!(
-                "<path d='M52 {yy} H332' stroke='#293743'/><text x='12' y='{}'>{h}</text>",
-                yy + 4.
-            );
-        } else {
-            svg += &format!("<path d='M46 {yy} H52' stroke='#72878e'/>");
-        }
-    }
-    for exp in xmin.log10().ceil() as i32..=xmax.log10().floor() as i32 {
-        let xx = x(10f64.powi(exp));
-        svg += &format!("<path d='M{xx} 30 V310' stroke='#293743'/>");
-        if let Ok(label) = math_power(&exp.to_string(), xx, 332., "middle") {
-            svg += &label;
-        }
-    }
-    let mut path = String::new();
-    let mut connected = false;
+    let mut points = Vec::new();
+    let mut errors = Vec::new();
+    let mut lower = Vec::new();
+    let mut upper = Vec::new();
     let mut nonpositive = 0;
     for &i in indices {
         let h = altitude(a.m.ion_range_km[i], f.elevation_deg);
@@ -525,35 +457,31 @@ fn profile(a: &App, indices: &[usize]) {
         }
         let v = a.power[i * n + a.selected] as f64;
         let se = a.power_sigma[i * n + a.selected] as f64;
-        let yy = y(altitude(a.m.ion_range_km[i], f.elevation_deg));
-        let lo = v - se;
-        let hi = v + se;
-        if hi > xmin && lo < xmax {
-            svg+=&format!("<path d='M{} {yy:.2} H{}' stroke='#80dfce' stroke-opacity='.35'><title>Raw Ne {v:.3e} ± {se:.3e} m⁻³ (1σ)</title></path>",x(lo),x(hi));
-        }
         if v <= 0. {
             nonpositive += 1;
         }
-        if !(xmin..=xmax).contains(&v) {
-            connected = false;
-            let xx = if v < xmin { 52. } else { 332. };
-            svg+=&format!("<path d='M{xx} {yy:.2} l4 -2 v4 z' fill='#e8ac69'><title>Outside logarithmic display: {v:.3e} ± {se:.3e} m⁻³</title></path>");
+        if v - se < xmax && v + se > xmin {
+            errors.extend([(v - se).max(xmin).log10(), h, (v + se).min(xmax).log10(), h]);
+        }
+        if v < xmin {
+            lower.extend([xmin.log10(), h]);
+            points.extend([f64::NAN, f64::NAN]);
+        } else if v > xmax {
+            upper.extend([xmax.log10(), h]);
+            points.extend([f64::NAN, f64::NAN]);
         } else {
-            let op = if connected { "L" } else { "M" };
-            path += &format!("{op}{:.2} {yy:.2} ", x(v));
-            connected = true;
-            svg += &format!("<circle cx='{}' cy='{yy:.2}' r='1.3' fill='#80dfce'><title>Raw Ne {v:.3e} ± {se:.3e} m⁻³</title></circle>", x(v));
+            points.extend([v.log10(), h]);
         }
     }
-    svg+=&format!("<path d='{path}' stroke='#80dfce' fill='none' stroke-width='1.4'/><text x='190' y='352' text-anchor='middle'>Raw Ne / m⁻³ · log scale</text></g></svg>");
-    el("profile").set_inner_html(&svg);
+    plotting::shared_curve("profile",&serde_json::json!({"title":"Raw Ne profile","height":380,"bounds":[xmin.log10(),xmax.log10(),bottom,top],"xlabel":"Raw Ne / m⁻³","xformat":"log10","ylabel":"Altitude / km","series":[{"xy":errors,"segments":true,"color":"#7b929e"},{"xy":points,"radius":1.5},{"xy":lower,"style":2,"radius":3},{"xy":upper,"style":3,"radius":3}]}).to_string());
     if let Some(c) = &a.calibration {
         if let Ok(c) = c.try_borrow() {
             calibration::markers(a, &c);
         }
     }
-    text("power-uncertainty",&format!("Horizontal bars: approximate ±1σ from 14 short integrations plus calibration. Clutter-induced covariance and systematic errors are not included. {nonpositive} nonpositive estimates in the displayed altitude interval; edge markers show values outside the log axis. Signed estimates remain in HDF5."));
+    text("power-uncertainty",&format!("Horizontal bars: approximate ±1σ from 14 short integrations plus calibration. Clutter-induced covariance and systematic errors are not included. {nonpositive} nonpositive estimates in the displayed altitude interval; limit markers show values outside the log axis. Signed estimates remain in HDF5."));
 }
+
 fn decoded(a: &mut App) -> Result<(), JsValue> {
     if a.decoded_selected != Some(a.selected) {
         return Ok(());
@@ -607,6 +535,12 @@ fn decoded(a: &mut App) -> Result<(), JsValue> {
         a.percentile,
         None,
         (Some(limit), a.magnitude),
+        [
+            low / 1e6,
+            (low + (width - 1) as f64 * 2.5e6 / bins as f64) / 1e6,
+            altitude(a.m.decoded_range_km[0], frame.elevation_deg),
+            altitude(a.m.decoded_range_km[89], frame.elevation_deg),
+        ],
     )?;
     text(
         "decoded-range",
@@ -665,6 +599,7 @@ async fn select(state: State, index: usize) -> Result<(), JsValue> {
     if data.len() != 2 * 800 * 90 * 2 {
         return Err(error("invalid native lag dimensions"));
     }
+    let render_start = js_sys::Date::now();
     a.decoded = native_spectra(&data, a.weighted).map_err(error)?;
     if !a.cache.iter().any(|(i, _)| *i == index) {
         a.cache.push_back((index, data.clone()));
@@ -672,6 +607,7 @@ async fn select(state: State, index: usize) -> Result<(), JsValue> {
     while a.cache.len() > 6 {
         a.cache.pop_front();
     }
+    let first_draw = a.native.is_empty();
     a.native = data;
     a.selected = index;
     a.decoded_selected = Some(index);
@@ -703,8 +639,16 @@ async fn select(state: State, index: usize) -> Result<(), JsValue> {
         .dyn_into::<HtmlInputElement>()?
         .set_value(&index.to_string());
     // Commit all panels together after fetch and FFT; never display mixed timestamps.
-    overview(&a)?;
+    if first_draw {
+        overview(&a)?;
+    } else {
+        overview_selection(&a)?;
+    }
     decoded(&mut a)?;
+    el("decoded").set_attribute(
+        "data-update-ms",
+        &(js_sys::Date::now() - render_start).to_string(),
+    )?;
     Ok(())
 }
 fn on(
@@ -719,6 +663,7 @@ fn on(
 }
 #[wasm_bindgen]
 pub async fn start() -> Result<(), JsValue> {
+    navigation::setup()?;
     let cfg: Config = json(&experiment_config("config.json")).await?;
     let query = web_sys::window().unwrap().location().search()?;
     let param = |key: &str| {
@@ -759,11 +704,20 @@ pub async fn start() -> Result<(), JsValue> {
     {
         return Err(error("unsupported or empty dataset"));
     }
-    let broad = floats(&(root.clone() + &m.overview_root + "broad-excess.f32")).await?;
-    let raw = floats(&(root.clone() + &m.overview_root + "broad-raw.f32")).await?;
-    let power = floats(&(root.clone() + &m.overview_root + "ion-short-raw-ne.f32")).await?;
-    let power_sigma =
-        floats(&(root.clone() + &m.overview_root + "ion-short-raw-ne-sigma.f32")).await?;
+    let overview_root = root.clone() + &m.overview_root;
+    let urls = [
+        "broad-excess.f32",
+        "broad-raw.f32",
+        "ion-short-raw-ne.f32",
+        "ion-short-raw-ne-sigma.f32",
+    ]
+    .map(|name| overview_root.clone() + name);
+    let (broad, raw, power, power_sigma) = futures_util::try_join!(
+        floats(&urls[0]),
+        floats(&urls[1]),
+        floats(&urls[2]),
+        floats(&urls[3])
+    )?;
     if let Some(button) = doc().get_element_by_id("refresh-data") {
         let cb = Closure::<dyn FnMut(web_sys::Event)>::new(move |_| {
             let _ = web_sys::window().unwrap().location().reload();
@@ -853,8 +807,15 @@ pub async fn start() -> Result<(), JsValue> {
                 .dyn_into::<HtmlSelectElement>()
                 .unwrap()
                 .value();
-            let _ = web_sys::window().unwrap().location().set_search(&format!(
-                "?resolution={resolution}&from={}&to={}&time={}",
+            let location = web_sys::window().unwrap().location();
+            let query = location.search().unwrap_or_default();
+            let experiment = query
+                .trim_start_matches('?')
+                .split('&')
+                .find(|p| p.starts_with("experiment="))
+                .unwrap_or("");
+            let _ = location.set_search(&format!(
+                "?resolution={resolution}&from={}&to={}&time={}&{experiment}",
                 a.view_start,
                 a.view_end,
                 a.m.frames[a.selected].start_unix + 0.1
@@ -956,38 +917,49 @@ pub async fn start() -> Result<(), JsValue> {
     Ok(())
 }
 
-fn math_power(exponent: &str, x: f64, y: f64, anchor: &str) -> Result<String, JsValue> {
-    let mj = js_sys::Reflect::get(&web_sys::window().unwrap(), &"MathJax".into())?;
-    let convert: js_sys::Function = js_sys::Reflect::get(&mj, &"tex2svg".into())?.dyn_into()?;
-    let node: web_sys::Element = convert
-        .call1(
-            &mj,
-            &format!(
-                "10^{{{}}}",
-                exponent.strip_suffix(".00").unwrap_or(exponent)
-            )
-            .into(),
-        )?
-        .dyn_into()?;
-    let svg = node
-        .query_selector("svg")?
-        .ok_or_else(|| error("MathJax SVG missing"))?;
-    let width = if exponent.ends_with(".00") || !exponent.contains('.') {
-        30.
-    } else {
-        42.
+/// Native measured-lag DFT shared by the EISCAT and Millstone inspectors.
+#[wasm_bindgen]
+pub fn acf_diagnostic(input: &str) -> Result<String, JsValue> {
+    #[derive(serde::Deserialize)]
+    struct Input {
+        lag_s: Vec<f64>,
+        observed: Vec<[Option<f64>; 2]>,
+        sigma: Vec<Option<f64>>,
+    }
+    let v: Input = serde_json::from_str(input).map_err(error)?;
+    let rows: Vec<_> = v
+        .lag_s
+        .iter()
+        .zip(&v.observed)
+        .zip(&v.sigma)
+        .filter_map(|((t, a), s)| {
+            let (Some(re), Some(im), Some(sigma)) = (a[0], a[1], *s) else {
+                return None;
+            };
+            [*t, re, im, sigma]
+                .iter()
+                .all(|v| v.is_finite())
+                .then_some((*t, guisdap_ion::Complex::new(re, im), [sigma, sigma]))
+        })
+        .collect();
+    let lags: Vec<_> = rows.iter().map(|r| r.0).collect();
+    let values: Vec<_> = rows.iter().map(|r| [r.1.re, r.1.im]).collect();
+    let errors: Vec<_> = rows.iter().map(|r| r.2).collect();
+    let freq: Vec<_> = (0..=800).map(|i| -40000. + i as f64 * 100.).collect();
+    let op = guisdap_ion::dft::AcfDft::new(&lags, &freq, 1e-5).map_err(error)?;
+    let power = op.transform(&values).map_err(error)?;
+    let se = op.diagonal_standard_error(&errors).map_err(error)?;
+    let acf = |imag: bool| {
+        let f = |z: guisdap_ion::Complex| if imag { z.im } else { z.re };
+        let high = rows
+            .iter()
+            .map(|r| f(r.1).abs() + r.2[0])
+            .fold(1., f64::max)
+            * 1.1;
+        serde_json::json!({"title":if imag{"Imaginary ACF"}else{"Real ACF"},"bounds":[0.,lags.last().copied().unwrap_or(1e-5)*1e6,-high,high],"xlabel":"Measured lag / µs","ylabel":"ACF / K","series":[{"xy":rows.iter().flat_map(|r|[r.0*1e6,f(r.1)-r.2[0],r.0*1e6,f(r.1)+r.2[0]]).collect::<Vec<_>>(),"segments":true,"color":"#7b929e"},{"xy":rows.iter().flat_map(|r|[r.0*1e6,f(r.1)]).collect::<Vec<_>>(),"radius":2,"line":false}],"caption":"Native measured lags; source variance shown, lag covariance unavailable."})
     };
-    let left = x - if anchor == "middle" {
-        width / 2.
-    } else if anchor == "end" {
-        width
-    } else {
-        0.
-    };
-    svg.set_attribute("x", &left.to_string())?;
-    svg.set_attribute("y", &(y - 15.).to_string())?;
-    svg.set_attribute("width", &width.to_string())?;
-    svg.set_attribute("height", "18")?;
-    svg.set_attribute("style", "color:#b6c8d8;overflow:visible")?;
-    Ok(svg.outer_html())
+    let lo = power.iter().zip(&se).map(|(p, e)| p - e).fold(0., f64::min);
+    let hi = power.iter().zip(&se).map(|(p, e)| p + e).fold(1., f64::max);
+    let pad = (hi - lo) * 0.05;
+    Ok(serde_json::json!({"real":acf(false),"imaginary":acf(true),"spectrum":{"title":"Measured ACF spectrum","bounds":[-40.,40.,lo-pad,hi+pad],"xlabel":"Frequency offset / kHz","ylabel":"ACF DFT / K Hz⁻¹","series":[{"xy":freq.iter().zip(&power).flat_map(|(f,p)|[*f/1000.,*p]).collect::<Vec<_>>()}],"bands":[{"values":(0..freq.len()).flat_map(|i|[freq[i]/1000.,power[i]-se[i],power[i]+se[i]]).collect::<Vec<_>>(),"color":"#236b8e4d"}],"caption":format!("{} measured lags · {} missing; no interpolation. Missing zero lag leaves the baseline undetermined. Diagonal source variance only.",op.unique_lags,op.missing_lags)}}).to_string())
 }

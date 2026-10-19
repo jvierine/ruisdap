@@ -2,5 +2,6 @@
   "ion_index_url": "data/2022-11-02-ionfit-full-60s-msis-iri-v5/index.json",
   "radar_frequency_hz": 930000000,
   "calibration_multiplier": 0.7,
-  "analysis_config_url": "ion-config.json"
+  "analysis_config_url": "ion-config.json",
+  "experiment_id": "ecb05fb11be224fcf1f48959"
 }

@@ -49,109 +49,54 @@ pub(super) fn render(v: &Viewer) {
             .filter(|r| r.end_unix > v.window_start && r.start_unix < v.window_end)
             .filter_map(|r| r.value(column).filter(|a| column != 0 || *a > 0.))
             .collect();
-        let mut s = svg(1100., 150.);
-        label(
-            &mut s,
-            60.,
-            18.,
-            &format!("{title}{}", if column == 0 { " · logarithmic" } else { "" }),
-            "start",
-        );
         let transform = |a: f64| if column == 0 { a.log10() } else { a };
-        if values.is_empty() {
-            label(&mut s, 60., 60., "No valid measurements", "start");
+        let low = values
+            .iter()
+            .copied()
+            .map(transform)
+            .fold(f64::INFINITY, f64::min);
+        let high = values
+            .iter()
+            .copied()
+            .map(transform)
+            .fold(f64::NEG_INFINITY, f64::max);
+        let pad = ((high - low) * 0.1).max(high.abs() * 0.002).max(0.01);
+        let (lo, hi) = if values.is_empty() {
+            (0., 1.)
+        } else if column == 0 {
+            values.sort_by(f64::total_cmp);
+            let n = values.len();
+            (
+                low - pad,
+                (2. * (values[(n - 1) / 2] + values[n / 2]) / 2.).log10(),
+            )
         } else {
-            let lo = values
-                .iter()
-                .copied()
-                .map(transform)
-                .fold(f64::INFINITY, f64::min);
-            let hi = values
-                .iter()
-                .copied()
-                .map(transform)
-                .fold(f64::NEG_INFINITY, f64::max);
-            let pad = ((hi - lo) * 0.1).max(hi.abs() * 0.002).max(0.01);
-            let (lo, hi) = if column == 0 {
-                values.sort_by(f64::total_cmp);
-                let n = values.len();
-                let median = (values[(n - 1) / 2] + values[n / 2]) / 2.;
-                let cap = 2. * median;
-                let count = values.iter().filter(|x| **x > cap).count();
-                label(
-                    &mut s,
-                    950.,
-                    18.,
-                    &format!("Upper limit: 2 × median = {cap:.1} K · {count} above limit"),
-                    "end",
-                );
-                (lo - pad, cap.log10())
-            } else {
-                (lo - pad, hi + pad)
-            };
-            let x = |t: f64| 60. + 890. * (t - v.window_start) / (v.window_end - v.window_start);
-            let y = |a: f64| 110. - 75. * (a - lo) / (hi - lo);
-            for i in 0..=2 {
-                let value = lo + (hi - lo) * i as f64 / 2.;
-                line(&mut s, 60., y(value), 950., y(value), "#293d4c");
-                label(
-                    &mut s,
-                    55.,
-                    y(value) + 4.,
-                    &format!(
-                        "{:.2}",
-                        if column == 0 {
-                            10_f64.powf(value)
-                        } else {
-                            value
-                        }
-                    ),
-                    "end",
-                );
+            (low - pad, high + pad)
+        };
+        let mut segments = Vec::new();
+        let mut points = Vec::new();
+        let mut above = 0;
+        for r in &data.records {
+            if r.end_unix <= v.window_start || r.start_unix >= v.window_end {
+                continue;
             }
-            for i in 0..=4 {
-                let t = v.window_start + (v.window_end - v.window_start) * i as f64 / 4.;
-                label(&mut s, x(t), 135., &clock(t), "middle");
-            }
-            for r in &data.records {
-                if r.end_unix <= v.window_start || r.start_unix >= v.window_end {
+            if let Some(value) = r.value(column).filter(|a| column != 0 || *a > 0.) {
+                let y = transform(value);
+                if y > hi {
+                    above += 1;
                     continue;
                 }
-                if let Some(value) = r.value(column).filter(|a| column != 0 || *a > 0.) {
-                    let value = transform(value);
-                    if value > hi {
-                        let px =
-                            x(((r.start_unix + r.end_unix) / 2.)
-                                .clamp(v.window_start, v.window_end));
-                        s.push_str(&format!(
-                            "<path d='M{},39 L{px},35 L{},39' fill='none' stroke='#efbc50'/>",
-                            px - 2.,
-                            px + 2.
-                        ));
-                        continue;
-                    }
-                    s.push_str(&format!(
-                        "<circle cx='{}' cy='{}' r='1' fill='#efbc50'/>",
-                        x(((r.start_unix + r.end_unix) / 2.).clamp(v.window_start, v.window_end)),
-                        y(value)
-                    ));
-                    line(
-                        &mut s,
-                        x(r.start_unix.max(v.window_start)),
-                        y(value),
-                        x(r.end_unix.min(v.window_end)),
-                        y(value),
-                        "#efbc50",
-                    );
-                }
-            }
-            let cursor = (selected.start_unix + selected.end_unix) / 2.;
-            if cursor >= v.window_start && cursor <= v.window_end {
-                line(&mut s, x(cursor), 30., x(cursor), 110., "#a9fff3");
+                segments.extend([
+                    r.start_unix.max(v.window_start),
+                    y,
+                    r.end_unix.min(v.window_end),
+                    y,
+                ]);
+                points.extend([(r.start_unix + r.end_unix) / 2., y]);
             }
         }
-        s.push_str("</svg>");
-        el(&format!("fit-instrument-{column}")).set_inner_html(&s);
+        let spec = serde_json::json!({"title":title,"height":220,"bounds":[v.window_start,v.window_end,lo,hi],"xlabel":"Time / UTC","xformat":"utc","ylabel":title,"yformat":if column==0{"log10"}else{""},"series":[{"xy":segments,"segments":true},{"xy":points,"line":false,"radius":1.2},{"xy":[(selected.start_unix+selected.end_unix)/2.,lo,(selected.start_unix+selected.end_unix)/2.,hi],"color":"#986327"}],"caption":if above>0{format!("{above} samples above the displayed limit (2 × median). Source values retained.")}else{String::new()}});
+        crate::plotting::shared_curve(&format!("fit-instrument-{column}"), &spec.to_string());
         let mut sum = 0.;
         let mut duration = 0.;
         for r in &data.records {

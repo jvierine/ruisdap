@@ -191,25 +191,6 @@ fn clock(t: f64) -> String {
     let s = (t.round() as i64).rem_euclid(86400);
     format!("{:02}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60)
 }
-fn svg(w: f64, h: f64) -> String {
-    format!("<svg viewBox='0 0 {w} {h}' role='img' style='width:100%;display:block;font:12px system-ui;fill:#b6c8d8'>")
-}
-fn line(s: &mut String, x1: f64, y1: f64, x2: f64, y2: f64, color: &str) {
-    s.push_str(&format!(
-        "<path d='M{x1:.2},{y1:.2} L{x2:.2},{y2:.2}' fill='none' stroke='{color}'/>"
-    ));
-}
-fn label(s: &mut String, x: f64, y: f64, t: &str, anchor: &str) {
-    if let Some(exp) = t.strip_prefix("10^") {
-        if let Ok(math) = super::math_power(exp, x, y, anchor) {
-            s.push_str(&math);
-            return;
-        }
-    }
-    s.push_str(&format!(
-        "<text x='{x:.1}' y='{y:.1}' text-anchor='{anchor}'>{t}</text>"
-    ));
-}
 fn value(p: &Plasma, i: usize) -> f64 {
     match i {
         0 => p.electron_density_m3,
@@ -220,141 +201,78 @@ fn value(p: &Plasma, i: usize) -> f64 {
     }
 }
 fn profile(v: &Viewer, param: usize) -> String {
-    let mut s = svg(310., 510.);
     let p = selected(v);
-    let bottom = p.gates[v.lower].lower_km;
-    let top = p.gates[v.upper].upper_km;
-    let y = |h: f64| 460. - (h - bottom) / (top - bottom) * 420.;
-    let [mut min, mut max] = v.scales[param];
-    if param == 0 {
-        min = min.log10();
-        max = max.log10();
-    }
-    let ticks: Vec<_> = (0..=5)
-        .map(|i| {
-            let z = min + (max - min) * i as f64 / 5.;
-            (
-                z,
-                if param == 0 {
-                    format!("10^{z:.2}")
-                } else {
-                    format!("{z:.0}")
-                },
-            )
-        })
-        .collect();
-    let x = |a: f64| 65. + (a - min) / (max - min) * 225.;
-    let transform = |a: f64| if param == 0 { a.max(1.).log10() } else { a };
-    for h in altitude_ticks(bottom, top) {
-        line(&mut s, 65., y(h as f64), 290., y(h as f64), "#233c4c");
-        label(&mut s, 57., y(h as f64) + 4., &h.to_string(), "end");
-    }
-    for (a, t) in ticks {
-        line(&mut s, x(a), 40., x(a), 460., "#233c4c");
-        label(&mut s, x(a), 480., &t, "middle");
-    }
-    label(&mut s, 65., 24., "Altitude / km", "start");
-    s.push_str("<defs><clipPath id='fit-area'><rect x='64' y='39' width='227' height='423'/></clipPath></defs><g clip-path='url(#fit-area)'>");
+    let [lo, hi] = v.scales[param];
+    let log = param == 0;
+    let tr = |x: f64| {
+        if log {
+            if x > 0. {
+                x.log10()
+            } else {
+                f64::NAN
+            }
+        } else {
+            x
+        }
+    };
+    let mut good = Vec::new();
+    let mut bad = Vec::new();
+    let mut left = Vec::new();
+    let mut right = Vec::new();
+    let mut selected = Vec::new();
+    let mut errors = Vec::new();
     for (i, g) in p.gates.iter().enumerate().take(v.upper + 1).skip(v.lower) {
         if v.mask_bad && rejected(g, v) {
             continue;
         }
-        if let Some(f) = &g.result {
-            let z = value(&f.plasma, param);
-            let a = transform(z);
-            let color = if g.status == "converged" {
-                "#f7be45"
-            } else {
-                "#b7a4d2"
-            };
-            if let Some(e) = f.standard_error[param] {
-                line(
-                    &mut s,
-                    x(transform(z - e).max(min)),
-                    y(g.altitude_km),
-                    x(transform(z + e).min(max)),
-                    y(g.altitude_km),
-                    color,
-                );
-            }
-            let cx = x(a.clamp(min, max));
-            let cy = y(g.altitude_km);
-            let fill = if g.status == "converged" {
-                color
-            } else {
-                "#10202a"
-            };
-            let r = if i == v.gate { 5. } else { 2.8 };
-            if a < min || a > max {
-                let direction = if a < min { 1. } else { -1. };
-                let x1 = cx + direction * 7.;
-                s.push_str(&format!("<path d='M{cx:.2},{cy:.2} L{x1:.2},{:.2} L{x1:.2},{:.2} Z' fill='{fill}' stroke='{color}'><title>{z:.3e}; {}</title></path>",cy-4.,cy+4.,g.status));
-            } else {
-                s.push_str(&format!("<circle cx='{cx:.2}' cy='{cy:.2}' r='{r}' fill='{fill}' stroke='{color}'><title>{z:.3e}; {}</title></circle>",g.status));
-            }
+        let Some(f) = &g.result else {
+            continue;
+        };
+        let z = value(&f.plasma, param);
+        if !z.is_finite() || (log && z <= 0.) {
+            continue;
+        }
+        let pos = tr(z.clamp(lo, hi));
+        let target = if z < lo {
+            &mut left
+        } else if z > hi {
+            &mut right
+        } else if g.status == "converged" {
+            &mut good
+        } else {
+            &mut bad
+        };
+        target.extend([pos, g.altitude_km]);
+        if let Some(e) = f.standard_error[param] {
+            errors.extend([
+                tr((z - e).max(lo)),
+                g.altitude_km,
+                tr((z + e).min(hi)),
+                g.altitude_km,
+            ]);
+        }
+        if i == v.gate {
+            selected.extend([pos, g.altitude_km]);
         }
     }
-    s.push_str("</g></svg>");
-    s
+    serde_json::json!({"title":"Selected-time plasma parameter profile","height":350,"bounds":[tr(lo),tr(hi),p.gates[v.lower].lower_km,p.gates[v.upper].upper_km],"xlabel":(["Ne / m⁻³","Ti / K","Te / K","Velocity / m s⁻¹"][param]),"xformat":if log{"log10"}else{""},"ylabel":"Altitude / km","series":[{"xy":errors,"segments":true,"color":"#7b929e"},{"xy":good,"style":0,"radius":3},{"xy":bad,"style":1,"radius":3},{"xy":left,"style":2,"radius":3},{"xy":right,"style":3,"radius":3},{"xy":selected,"style":1,"radius":6,"color":"#986327"}]}).to_string()
 }
 
-fn altitude_ticks(bottom: f64, top: f64) -> Vec<i32> {
-    let step = if top - bottom <= 150. { 10 } else { 50 };
-    let first = (bottom / step as f64).ceil() as i32 * step;
-    (first..=top.floor() as i32)
-        .step_by(step as usize)
-        .collect()
-}
-fn seismic_color(t: f64) -> String {
-    let stops = [
-        [0., 0., 76.5],
-        [0., 0., 255.],
-        [255., 255., 255.],
-        [255., 0., 0.],
-        [127.5, 0., 0.],
-    ];
-    let p = t.clamp(0., 1.) * 4.;
-    let i = (p.floor() as usize).min(3);
-    let f = p - i as f64;
-    let c = [0, 1, 2].map(|k| (stops[i][k] * (1. - f) + stops[i + 1][k] * f).round() as u8);
-    format!("rgb({},{},{})", c[0], c[1], c[2])
-}
-fn plasma_color(t: f64) -> String {
-    // Samples of the perceptually ordered plasma palette, linearly interpolated.
-    let stops = [
-        [13., 8., 135.],
-        [84., 3., 160.],
-        [139., 10., 165.],
-        [185., 50., 137.],
-        [219., 92., 104.],
-        [244., 136., 73.],
-        [254., 188., 43.],
-        [240., 249., 33.],
-    ];
-    let p = t.clamp(0., 1.) * (stops.len() - 1) as f64;
-    let a = (p.floor() as usize).min(stops.len() - 2);
-    let f = p - a as f64;
-    let rgb = [0, 1, 2].map(|i| (stops[a][i] * (1. - f) + stops[a + 1][i] * f).round() as u8);
-    format!("rgb({},{},{})", rgb[0], rgb[1], rgb[2])
-}
 fn time_altitude(v: &Viewer, param: usize) -> Result<(), JsValue> {
     let p = &v.data.profiles[v.time];
     let bottom = p.gates[v.lower].lower_km;
     let top = p.gates[v.upper].upper_km;
     let start = v.window_start;
     let end = v.window_end;
-    let [mut min, mut max] = v.scales[param];
+    let [min, max] = v.scales[param];
     text(
         &format!("fit-scale-applied-{param}"),
         &format!("Applied limits: {min:.3e} to {max:.3e}"),
     );
-    if param == 0 || param == 4 {
-        min = min.log10();
-        max = max.log10();
-    }
     let nx = 1200usize;
     let ny = 240usize;
     let mut pixels = vec![f32::NAN; nx * ny];
+    let mut flags = vec![0u8; nx * ny];
     for ix in 0..nx {
         let time = start + (end - start) * (ix as f64 + 0.5) / nx as f64;
         let ti = v.data.profiles.partition_point(|p| p.end_unix <= time);
@@ -386,199 +304,90 @@ fn time_altitude(v: &Viewer, param: usize) -> Result<(), JsValue> {
             if !raw.is_finite() || ((param == 0 || param == 4) && raw <= 0.) {
                 continue;
             }
-            let z = if param == 0 || param == 4 {
-                raw.log10()
-            } else {
-                raw
-            };
-            pixels[iy * nx + ix] = ((if param == 3 {
-                if z < 0. {
-                    0.5 * (1. - z / min)
-                } else {
-                    0.5 + 0.5 * z / max
-                }
-            } else {
-                (z - min) / (max - min)
-            })
-            .clamp(0., 1.)
-                + if flag { 2. } else { 0. }) as f32;
+            pixels[iy * nx + ix] = raw as f32;
+            flags[iy * nx + ix] = u8::from(flag);
         }
     }
-    raster::draw(&format!("fit-raster-{param}"), &pixels, nx, ny, param == 3)?;
-    let mut s = svg(1100., 280.).replace("0 0 1100 280", "0 30 1100 225");
-    let y = |h: f64| 220. - (h - bottom) / (top - bottom) * 180.;
-    for h in altitude_ticks(bottom, top) {
-        label(&mut s, 52., y(h as f64) + 4., &h.to_string(), "end");
-    }
-    s.push_str("<text x='12' y='130' text-anchor='middle' transform='rotate(-90 12 130)'>Altitude / km</text>");
-    let parameter = [
-        "Ne / m⁻³",
-        "Ti / K",
-        "Te / K",
-        "Velocity / m s⁻¹",
-        "Raw Ne / m⁻³",
-    ][param];
-    s.push_str(&format!("<text x='1080' y='130' text-anchor='middle' transform='rotate(-90 1080 130)'>{parameter}</text>"));
-    for i in 0..=4 {
-        let t = start + (end - start) * i as f64 / 4.;
-        label(
-            &mut s,
-            60. + 890. * i as f64 / 4.,
-            245.,
-            &clock(t),
-            "middle",
-        );
-    }
-
-    for i in 0..100 {
-        s.push_str(&format!(
-            "<rect x='978' y='{:.2}' width='13' height='1.9' fill='{}'/>",
-            220. - (i + 1) as f64 * 1.8,
-            if param == 3 {
-                seismic_color(i as f64 / 99.)
-            } else {
-                plasma_color(i as f64 / 99.)
-            }
-        ));
-    }
-    let ticks = if param == 3 { 6 } else { 5 };
-    for i in 0..=ticks {
-        let t = i as f64 / ticks as f64;
-        let z = if param == 3 {
-            if t < 0.5 {
-                min * (1. - 2. * t)
-            } else {
-                max * (2. * t - 1.)
-            }
-        } else {
-            min + (max - min) * t
-        };
-        let t = if param == 0 || param == 4 {
-            format!("10^{z:.2}")
-        } else {
-            format!("{z:.0}")
-        };
-        label(
-            &mut s,
-            999.,
-            224. - i as f64 / ticks as f64 * 180.,
-            &t,
-            "start",
-        );
-    }
-    s.push_str("</svg>");
-    el(&format!("fit-map-{param}")).set_inner_html(&s);
+    let spec = serde_json::json!({"title":(["Ne / m⁻³","Ti / K","Te / K","Velocity / m s⁻¹","Raw Ne / m⁻³"][param]),"bounds":[start,end,bottom,top],"limits":v.scales[param],"mode":if param==0||param==4{1}else{0},"normalized":false,"palette":if param==3{0}else{1},"external_navigation":true,"ylabel":"Altitude / km"});
+    raster::draw(
+        &format!("fit-raster-{param}"),
+        &pixels,
+        &flags,
+        nx,
+        ny,
+        &spec,
+    )?;
     Ok(())
 }
+
 fn cursor(v: &Viewer, param: usize) {
     let p = &v.data.profiles[v.time];
     let g = &p.gates[v.gate];
-    let bottom = p.gates[v.lower].lower_km;
-    let top = p.gates[v.upper].upper_km;
-    let x = 60.
-        + 890. * ((p.start_unix + p.end_unix) / 2. - v.window_start)
-            / (v.window_end - v.window_start);
-    let y = 220. - (g.altitude_km - bottom) / (top - bottom) * 180.;
-    let mut s = svg(1100., 280.).replace("0 0 1100 280", "0 30 1100 225");
-    if (60. ..=950.).contains(&x) {
-        line(&mut s, x, 40., x, 220., "#ffffff");
-        line(&mut s, x - 4., y, x + 4., y, "#ffffff");
-    }
-    s.push_str("</svg>");
-    el(&format!("fit-cursor-{param}")).set_inner_html(&s);
+    let x = ((p.start_unix + p.end_unix) / 2. - v.window_start) / (v.window_end - v.window_start);
+    let y = (p.gates[v.upper].upper_km - g.altitude_km)
+        / (p.gates[v.upper].upper_km - p.gates[v.lower].lower_km);
+    el(&format!("fit-cursor-{param}")).set_inner_html(&if (0. ..=1.).contains(&x){format!("<div class='fit-selection-cursor' style='left:calc(76px + (100% - 208px)*{x});top:22px;bottom:58px'><span style='top:{}%'></span></div>",y*100.)}else{String::new()});
 }
+
 fn acf(v: &Viewer, component: usize) -> String {
     let g = &selected(v).gates[v.gate];
-    let mut s = svg(620., 330.);
-    let Some(f) = &g.result else {
-        label(&mut s, 50., 80., &g.status, "start");
-        s.push_str("</svg>");
-        return s;
-    };
-    let magnitude = g
+    let mut magnitude = g
         .observed
         .iter()
         .zip(&g.sigma)
-        .flat_map(|(a, e)| (0..2).map(move |c| a[c].abs() + e[c]))
-        .chain(f.model_curve.iter().flat_map(|p| {
-            (0..2).map(move |c| p.value[c].abs() + p.standard_error.map_or(0., |e| e[c]))
-        }))
+        .map(|(a, e)| a[component].abs() + e[component])
         .fold(1., f64::max);
-    let scale = 10f64.powf(magnitude.log10().floor());
-    let ymax = (magnitude / scale * 1.1).max(1.);
-    let x = |t: f64| 70. + t / 420. * 530.;
-    let y = |a: f64| 155. - a / scale / ymax * 115.;
-    for i in -2..=2 {
-        let a = i as f64 * ymax / 2.;
-        line(&mut s, 70., y(a * scale), 600., y(a * scale), "#233c4c");
-        label(&mut s, 62., y(a * scale) + 4., &format!("{a:.1}"), "end");
-    }
-    for t in (0..=400).step_by(100) {
-        line(&mut s, x(t as f64), 40., x(t as f64), 270., "#233c4c");
-        label(&mut s, x(t as f64), 290., &t.to_string(), "middle");
-    }
-    label(
-        &mut s,
-        70.,
-        22.,
-        &format!("Response-normalized lag / {scale:.0e} m⁻³"),
-        "start",
-    );
-    label(&mut s, 335., 315., "Measured lag / µs", "middle");
-    // Draw the band behind measurements, with straight segments only between
-    // supplied measured-lag predictions. Never fill an absent uncertainty.
-    for segment in f.model_curve.split(|p| p.standard_error.is_none()) {
-        if segment.len() < 2 {
-            continue;
+    if let Some(f) = &g.result {
+        for p in &f.model_curve {
+            magnitude = magnitude
+                .max(p.value[component].abs() + p.standard_error.map_or(0., |e| e[component]));
         }
-        let mut path = String::new();
-        for (i, p) in segment.iter().enumerate() {
-            path.push_str(&format!(
-                "{} {:.2},{:.2} ",
-                if i == 0 { "M" } else { "L" },
-                x(p.lag_s * 1e6),
-                y(p.value[component] + p.standard_error.unwrap()[component])
-            ));
-        }
-        for p in segment.iter().rev() {
-            path.push_str(&format!(
-                "L {:.2},{:.2} ",
-                x(p.lag_s * 1e6),
-                y(p.value[component] - p.standard_error.unwrap()[component])
-            ));
-        }
-        s.push_str(&format!("<path class='model-band' d='{path} Z' fill='#f7be45' fill-opacity='0.30' stroke='none'/>"));
     }
-    for ((&lag, obs), err) in g.lag_us.iter().zip(&g.observed).zip(&g.sigma) {
-        let xx = x(lag);
-        line(
-            &mut s,
-            xx,
-            y(obs[component] - err[component]),
-            xx,
-            y(obs[component] + err[component]),
-            "#96a9bb",
-        );
-        s.push_str(&format!(
-            "<circle cx='{xx:.2}' cy='{:.2}' r='2.4' fill='#96a9bb'/>",
-            y(obs[component])
-        ));
-    }
-    let mut path = String::new();
-    for (i, p) in f.model_curve.iter().enumerate() {
-        path.push_str(&format!(
-            "{} {:.2},{:.2} ",
-            if i == 0 { "M" } else { "L" },
-            x(p.lag_s * 1e6),
-            y(p.value[component])
-        ));
-    }
-    s.push_str(&format!(
-        "<path class='model-line' d='{path}' fill='none' stroke='#f7be45' stroke-width='2'/>"
-    ));
-    s.push_str("</svg>");
-    s
+    let scale = 10_f64.powf(magnitude.log10().floor());
+    let ymax = magnitude / scale * 1.1;
+    let observed: Vec<_> = g
+        .lag_us
+        .iter()
+        .zip(&g.observed)
+        .flat_map(|(t, a)| [*t, a[component] / scale])
+        .collect();
+    let errors: Vec<_> = g
+        .lag_us
+        .iter()
+        .zip(&g.observed)
+        .zip(&g.sigma)
+        .flat_map(|((t, a), e)| {
+            [
+                *t,
+                (a[component] - e[component]) / scale,
+                *t,
+                (a[component] + e[component]) / scale,
+            ]
+        })
+        .collect();
+    let model: Vec<f64> = g
+        .result
+        .iter()
+        .flat_map(|f| &f.model_curve)
+        .flat_map(|p| [p.lag_s * 1e6, p.value[component] / scale])
+        .collect();
+    let band: Vec<f64> = g
+        .result
+        .iter()
+        .flat_map(|f| &f.model_curve)
+        .flat_map(|p| {
+            [
+                p.lag_s * 1e6,
+                p.standard_error
+                    .map_or(f64::NAN, |e| (p.value[component] - e[component]) / scale),
+                p.standard_error
+                    .map_or(f64::NAN, |e| (p.value[component] + e[component]) / scale),
+            ]
+        })
+        .collect();
+    serde_json::json!({"title":if component==0{"Real ACF"}else{"Imaginary ACF"},"bounds":[0.,420.,-ymax,ymax],"xlabel":"Measured lag / µs","ylabel":format!("ACF / {scale:.0e} m⁻³"),"series":[{"xy":errors,"segments":true,"color":"#7b929e"},{"xy":observed,"line":false,"radius":2.4,"color":"#647b89"},{"xy":model,"color":"#236b8e"}],"bands":[{"values":band,"color":"#236b8e4d"}]}).to_string()
 }
+
 fn render(v: &Viewer) {
     colors::sync(v);
     text("fit-uncertainty", &v.data.uncertainty);
@@ -639,7 +448,7 @@ fn render(v: &Viewer) {
         ),
     );
     for i in 0..4 {
-        el(&format!("fit-profile-{i}")).set_inner_html(&profile(v, i));
+        crate::plotting::shared_curve(&format!("fit-profile-{i}"), &profile(v, i));
     }
     text("fit-quality-value", &format!("{:.1}", v.quality_limit));
     let rejected_count = p.gates.iter().filter(|g| rejected(g, v)).count();
@@ -726,10 +535,10 @@ fn render(v: &Viewer) {
             .set_value(&clock(t));
     }
     for i in 0..2 {
-        el(&format!("fit-acf-{i}")).set_inner_html(&acf(v, i));
+        crate::plotting::shared_curve(&format!("fit-acf-{i}"), &acf(v, i));
     }
-    el("fit-spectrum").set_inner_html(&analytical_spectrum(v));
-    el("fit-measured-spectrum").set_inner_html(&measured::spectrum(v));
+    crate::plotting::shared_curve("fit-spectrum", &analytical_spectrum(v));
+    crate::plotting::shared_curve("fit-measured-spectrum", &measured::spectrum(v));
     text(
         "fit-gate-model",
         &format!(
@@ -905,6 +714,9 @@ async fn change_resolution(state: Rc<RefCell<Viewer>>, resolution: usize) -> Res
             .partition_point(|g| g.upper_km <= height)
             .clamp(lower, upper);
         let max = (gates.len() - 1).to_string();
+        el("fit-resolution")
+            .dyn_into::<HtmlSelectElement>()?
+            .set_value(&resolution.to_string());
         el("fit-gate").set_inner_html(
             &gates
                 .iter()
@@ -1026,6 +838,7 @@ fn seconds(s: &str) -> Option<f64> {
 }
 #[wasm_bindgen]
 pub async fn start_ion() -> Result<(), JsValue> {
+    crate::navigation::setup()?;
     let original = web_sys::window()
         .unwrap()
         .location()
@@ -1076,6 +889,9 @@ pub async fn start_ion() -> Result<(), JsValue> {
             .map(|(i, d)| format!("<option value='{i}'>{}</option>", d.label))
             .collect::<String>(),
     );
+    el("fit-resolution")
+        .dyn_into::<HtmlSelectElement>()?
+        .set_value(&resolution.to_string());
     el("fit-gate").set_inner_html(
         &data.profiles[0]
             .gates
@@ -1102,7 +918,7 @@ pub async fn start_ion() -> Result<(), JsValue> {
         .position(|g| g.altitude_km >= 200.)
         .unwrap_or(0);
     let mut statuses = vec![None; location.datasets.len()];
-    statuses[0] = data.processing.clone();
+    statuses[resolution] = data.processing.clone();
     let state = Rc::new(RefCell::new(Viewer {
         instruments,
         window_start: data.profiles[0].start_unix,
@@ -1528,16 +1344,12 @@ pub async fn start_ion() -> Result<(), JsValue> {
 }
 
 fn selection(region: Option<(f64, f64, f64, f64, f64, f64)>) {
-    let markup = region.map_or(String::new(), |(a,b,c,d,t0,t1)| {
-        let x=60.+890.*a.min(b); let w=890.*(a-b).abs();let y=40.+180.*c.min(d);let h=180.*(c-d).abs();
-        format!("<svg viewBox='0 30 1100 225' style='width:100%;display:block'><rect x='{x}' y='{y}' width='{w}' height='{h}' fill='#70d6cf' fill-opacity='.22' stroke='#a9fff3' stroke-width='2'/><text x='60' y='55' fill='#a9fff3' font-size='13'>Zoom: {}–{} UTC</text></svg>",clock(t0.min(t1)),clock(t0.max(t1)))
-    });
+    let html=region.map_or(String::new(),|(x0,x1,y0,y1,t0,t1)|format!("<div style='position:absolute;left:calc(76px + (100% - 208px)*{});top:calc(22px + (100% - 80px)*{});width:calc((100% - 208px)*{});height:calc((100% - 80px)*{});border:1px solid #236b8e;background:#236b8e22'><span style='background:#fff;color:#236b8e'>{}–{} UTC</span></div>",x0.min(x1),y0.min(y1),(x1-x0).abs(),(y1-y0).abs(),clock(t0.min(t1)),clock(t0.max(t1))));
     for i in 0..5 {
-        el(&format!("fit-selection-{i}")).set_inner_html(&markup);
+        el(&format!("fit-selection-{i}")).set_inner_html(&html);
     }
 }
 
-// Window-local UI state; no scientific state or global mutable variables.
 fn move_settings(x: f64, y: f64) {
     let panel = el("fit-settings");
     let rect = panel.get_bounding_client_rect();
@@ -1628,11 +1440,9 @@ fn settings_drag() -> Result<(), JsValue> {
 fn analytical_spectrum(v: &Viewer) -> String {
     use guisdap_ion::spectrum::{IonSpecies, PlasmaState, SpectrumModel};
     let g = &selected(v).gates[v.gate];
-    let mut s = svg(620., 330.);
+
     let Some(f) = &g.result else {
-        label(&mut s, 50., 80., &g.status, "start");
-        s.push_str("</svg>");
-        return s;
+        return empty_curve(&g.status);
     };
     let model = SpectrumModel {
         radar_frequency_hz: 930e6,
@@ -1665,15 +1475,7 @@ fn analytical_spectrum(v: &Viewer) -> String {
         })
     };
     let Ok(values) = evaluate(p) else {
-        label(
-            &mut s,
-            50.,
-            80.,
-            "Spectrum unavailable for this fit",
-            "start",
-        );
-        s.push_str("</svg>");
-        return s;
+        return empty_curve("Spectrum unavailable for this fit");
     };
     let n = f.free_parameter_indices.len();
     let mut gradients = Vec::new();
@@ -1741,81 +1543,25 @@ fn analytical_spectrum(v: &Viewer) -> String {
         .max(1.);
     let scale = 10f64.powf(peak.log10().floor());
     let top = peak * 1.08;
-    let x = |hz: f64| 60. + 510. * (hz + 40000.) / 80000.;
-    let y = |value: f64| 270. - 220. * value / top;
-    for tick in [-40, -20, 0, 20, 40] {
-        let xx = x(tick as f64 * 1000.);
-        line(&mut s, xx, 50., xx, 270., "#293d4c");
-        label(&mut s, xx, 292., &tick.to_string(), "middle");
-    }
-    for i in 0..=4 {
-        let value = top * i as f64 / 4.;
-        line(&mut s, 60., y(value), 570., y(value), "#293d4c");
-        label(
-            &mut s,
-            55.,
-            y(value) + 4.,
-            &format!("{:.2}", value / scale),
-            "end",
-        );
-    }
-    label(
-        &mut s,
-        60.,
-        18.,
-        &format!("Ne S(f) / (m⁻³ Hz⁻¹) · ×{scale:.0e}"),
-        "start",
-    );
-    label(&mut s, 315., 320., "Frequency offset / kHz", "middle");
-    if let Some(errors) = &errors {
-        let mut path = String::new();
-        for (i, (&freq, &value)) in frequency.iter().zip(&values).enumerate() {
-            path.push_str(&format!(
-                "{}{},{} ",
-                if i == 0 { "M" } else { "L" },
-                x(freq),
-                y(value + errors[i])
-            ));
-        }
-        for i in (0..values.len()).rev() {
-            path.push_str(&format!(
-                "L{},{} ",
-                x(frequency[i]),
-                y((values[i] - errors[i]).max(0.))
-            ));
-        }
-        path.push('Z');
-        s.push_str(&format!(
-            "<path d='{path}' fill='#efbc50' fill-opacity='0.30'/>"
-        ));
-    }
-    let path = frequency
+    let points: Vec<_> = frequency
         .iter()
         .zip(&values)
-        .enumerate()
-        .map(|(i, (&freq, &value))| {
-            format!(
-                "{}{},{} ",
-                if i == 0 { "M" } else { "L" },
-                x(freq),
-                y(value)
-            )
+        .flat_map(|(f, v)| [*f / 1000., *v / scale])
+        .collect();
+    let band: Vec<_> = errors
+        .iter()
+        .flat_map(|e| {
+            (0..values.len()).flat_map(|i| {
+                [
+                    frequency[i] / 1000.,
+                    (values[i] - e[i]).max(0.) / scale,
+                    (values[i] + e[i]) / scale,
+                ]
+            })
         })
-        .collect::<String>();
-    s.push_str(&format!(
-        "<path d='{path}' fill='none' stroke='#efbc50' stroke-width='2'/>"
-    ));
-    label(
-        &mut s,
-        60.,
-        38.,
-        if errors.is_some() {
-            "Intrinsic two-ion model · ±1σ parameter uncertainty"
-        } else {
-            "Intrinsic two-ion model · uncertainty unavailable"
-        },
-        "start",
-    );
-    s.push_str("</svg>");
-    s
+        .collect();
+    serde_json::json!({"title":"Analytical ISR spectrum","bounds":[-40.,40.,0.,top/scale],"xlabel":"Frequency offset / kHz","ylabel":format!("Ne S(f) / {scale:.0e} m⁻³ Hz⁻¹"),"series":[{"xy":points}],"bands":[{"values":band,"color":"#236b8e4d"}],"caption":if errors.is_some(){"Intrinsic two-ion model · ±1σ parameter uncertainty"}else{"Intrinsic two-ion model · uncertainty unavailable"}}).to_string()
+}
+fn empty_curve(message: &str) -> String {
+    serde_json::json!({"bounds":[0,1,0,1],"caption":message}).to_string()
 }

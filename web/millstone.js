@@ -34,6 +34,7 @@ function renderSelected(){
 function candidate(){
  const f=m.fits[selected],source=records(),t=(source.start+source.end)/2,frequency=Number(el('mh-frequency').value)*1e6,gate=selectedRange,range=m.range_m[gate],[stored,Ti,Te]=f.parameters[gate],proxy=f.uncalibrated_density_proxy?.[gate]??stored,sigma=Number(el('mh-frequency-error').value)*1000;
  if(!Number.isFinite(frequency)||Math.abs(frequency)<1e6||Math.abs(frequency)>12.5e6||!(proxy>0&&Ti>0&&Te>0))throw Error('Select a plasma-line frequency and a valid ion-line range.');
+ if(!(Number.isFinite(f.transmitter_w)&&f.transmitter_w>0))throw Error('Missing or invalid recorded transmit power in ion fit.');
  if(!(sigma>0)||!Number.isFinite(sigma))throw Error('Frequency uncertainty must be positive.');if(Math.abs(m.fit_times[selected]-t)>300)throw Error('No ion-line fit within 300 seconds of this plasma integration.');
  const e=1.602176634e-19,me=9.1093837139e-31,eps=8.8541878188e-12,kb=1.380649e-23,k=4*Math.PI*m.radar_frequency_hz/299792458,omega2=(2*Math.PI*frequency)**2-3*k*k*kb*Te/me;
  if(!(omega2>0))throw Error('Thermal correction exceeds the selected frequency squared.');const ne=eps*me*omega2/e**2,q=k*k*eps*kb*Te/(ne*e*e),ratio=Te/Ti,gain=ne*(1+ratio)/((1+q)*(1+q+ratio))/proxy;

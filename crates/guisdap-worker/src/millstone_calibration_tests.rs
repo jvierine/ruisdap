@@ -11,7 +11,7 @@ mod product_tests {
         std::fs::create_dir_all(web.join("catalog")).unwrap();
         let t = 1712599200.;
         let mf = data.join("manifest.json");
-        let manifest = json!({"date":"2024-04-08","antenna":"ZENITH","radar_frequency_hz":440.2e6,"range_m":[300000.,304500.],"fits":[{"id":"fit","start_unix_s":t,"end_unix_s":t+180.,"parameters":[[3500.,1000.,2000.,0.],[3500.,1000.,2000.,0.]]}],"parameter_names":["proxy","Ti","Te","v"],"raw_url":"raw.f32","plasma_url":"plasma.f32"});
+        let manifest = json!({"date":"2024-04-08","antenna":"ZENITH","radar_frequency_hz":440.2e6,"range_m":[300000.,304500.],"fits":[{"id":"fit","transmitter_w":1e6,"start_unix_s":t,"end_unix_s":t+180.,"parameters":[[3500.,1000.,2000.,0.],[3500.,1000.,2000.,0.]]}],"parameter_names":["proxy","Ti","Te","v"],"raw_url":"raw.f32","plasma_url":"plasma.f32"});
         std::fs::write(&mf, serde_json::to_vec(&manifest).unwrap()).unwrap();
         let before = std::fs::read(&mf).unwrap();
         std::fs::write(web.join("millstone-config.json"),br#"{"datasets":[{"date":"2024-04-08","antenna":"ZENITH","data_root":"data/source/zenith/"},{"date":"2024-04-08","antenna":"MISA","data_root":"data/source/misa/"}]}"#).unwrap();
@@ -68,10 +68,34 @@ mod product_tests {
         assert_eq!(preview["magic_constant_units"], MAGIC_CONSTANT_UNITS);
         assert_eq!(preview["independent_fit_count"], 1);
         assert_eq!(preview["point_count"], 1);
+        assert_eq!(preview["points"][0]["transmitter_w"], 1e6);
         assert!(preview["between_fit_scatter"].is_null());
         assert!(!web.join("catalog/millstone-config.json").exists());
         assert_eq!(std::fs::read(&mf).unwrap(), before);
         assert_eq!(std::fs::read_dir(web.join("data")).unwrap().count(), 1);
+        // Receiver signal and P_tx both double at fixed plasma. The imported
+        // proxy has already divided out power, so C must remain unchanged.
+        let mut twice_power = manifest.clone();
+        twice_power["fits"][0]["transmitter_w"] = 2e6.into();
+        let a0_k = 3500. * 1e6 / ((1. + 2000. / 1000.) * 300_f64.powi(2));
+        twice_power["fits"][0]["parameters"][0][0] =
+            (2. * a0_k * (1. + 2000. / 1000.) * 300_f64.powi(2) / 2e6).into();
+        std::fs::write(&mf, serde_json::to_vec(&twice_power).unwrap()).unwrap();
+        let doubled = magic_constant_result(&s, &request()).unwrap();
+        assert!((doubled["magic_constant"].as_f64().unwrap() / expected - 1.).abs() < 1e-12);
+        assert_eq!(doubled["points"][0]["transmitter_w"], 2e6);
+        for invalid in [Value::Null, json!(0.), json!(-1.)] {
+            let mut broken = manifest.clone();
+            broken["fits"][0]["transmitter_w"] = invalid;
+            std::fs::write(&mf, serde_json::to_vec(&broken).unwrap()).unwrap();
+            assert!(magic_constant_result(&s, &request())
+                .unwrap_err()
+                .to_string()
+                .contains("transmit power"));
+            assert!(calibrate_density(&s, request()).is_err());
+            assert!(!web.join("catalog/millstone-config.json").exists());
+        }
+        std::fs::write(&mf, &before).unwrap();
         let mut stale = request();
         stale.revision = 2;
         assert!(magic_constant_result(&s, &stale).is_err());
@@ -132,6 +156,22 @@ mod product_tests {
                 < 1e-12
         );
         assert!(h.group("records/fit/fit").is_ok());
+        assert_eq!(
+            h.dataset("fit_transmitter_power_w")
+                .unwrap()
+                .read_raw::<f64>()
+                .unwrap(),
+            vec![1e6]
+        );
+        let meta = h
+            .group("records/fit")
+            .unwrap()
+            .attr("metadata")
+            .unwrap()
+            .read_raw::<u8>()
+            .unwrap();
+        let meta: Value = serde_json::from_slice(&meta).unwrap();
+        assert_eq!(meta["transmitter_w"], 1e6);
         assert_eq!(
             h.dataset("records/fit/fit/parameters").unwrap().shape(),
             vec![2, 4]

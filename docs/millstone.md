@@ -61,6 +61,21 @@ included calibration points automatically after loading or changing the saved re
 Thus C has units `W m^-3 K^-1 km^-2` for this chain; receiver gain has already
 been removed from A0. In the small-Debye limit, `Ne = C p`.
 
+Transmit power is **already divided out**, using each source fit's recorded
+`P_tx` in watts, not the transmitter's nominal rating. Calibration validates
+that this power is finite and positive, copies it to each checked point, and
+retains it per fit in the calibrated HDF5 product. It must not divide the fitted
+proxy by power a second time. Doubling signal and transmit power at fixed
+plasma must leave the inferred C unchanged.
+
+The legacy fitter uses an arithmetic mean of source `P_tx`, whereas it averages
+ACFs with inverse-variance weights. This is not an exact power correction when
+power and weights vary together. Historical products retain that definition;
+correcting the averaging requires the source ACFs and a new fit, rather than an
+extra scalar division in the calibration GUI. In a new fit, power belongs in
+the measurement model (including its variance and range/lag response) before
+combining measurements.
+
 `POST millstone/estimate` verifies the exact saved notebook revision and derives
 C from trusted source fits and plasma frequencies. It returns per-point C,
 median C within each fit, the median across independent fits, and scaled MAD

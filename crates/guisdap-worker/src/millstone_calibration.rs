@@ -45,6 +45,16 @@ fn atomic_json(path: &std::path::Path, v: &Value) -> anyhow::Result<()> {
 // C multiplies the legacy proxy A0 (1 + Te/Ti) r_km² / Ptx_W.
 // The proxy uses receiver-gain-corrected fitted ACF amplitudes.
 const MAGIC_CONSTANT_UNITS: &str = "W m^-3 K^-1 km^-2";
+// The legacy fit has already divided by its recorded arithmetic-mean P_tx.
+// Validate and retain that power; never divide this proxy by power again.
+fn fit_transmit_power(fit: &Value) -> anyhow::Result<f64> {
+    let power = fit["transmitter_w"].as_f64().unwrap_or(f64::NAN);
+    anyhow::ensure!(
+        power.is_finite() && power > 0.,
+        "Missing or invalid recorded transmit power in ion fit"
+    );
+    Ok(power)
+}
 struct ReviewedCalibration {
     source: Vec<u8>,
     notebook: Vec<u8>,
@@ -99,6 +109,7 @@ fn review_calibration(s: &Store, q: &CalibrationRequest) -> anyhow::Result<Revie
             .iter()
             .find(|f| f["id"] == p["fit_id"])
             .ok_or_else(|| anyhow::anyhow!("Unknown ion fit"))?;
+        let transmitter_w = fit_transmit_power(fit)?;
         let dt = ((fit["start_unix_s"].as_f64().unwrap() + fit["end_unix_s"].as_f64().unwrap()
             - source.start
             - source.end)
@@ -143,6 +154,7 @@ fn review_calibration(s: &Store, q: &CalibrationRequest) -> anyhow::Result<Revie
         let mut checked_point = p.clone();
         checked_point["multiplier"] = gain.into();
         checked_point["magic_constant"] = gain.into();
+        checked_point["transmitter_w"] = transmitter_w.into();
         checked_point["plasma_density_m3"] = ne.into();
         checked.push(checked_point);
     }
@@ -200,13 +212,19 @@ fn calibrate_density(s: &Store, q: CalibrationRequest) -> anyhow::Result<Value> 
         .get(&format!("{}/{}", q.date, q.antenna))
         .unwrap();
     let k = 4. * std::f64::consts::PI * m["radar_frequency_hz"].as_f64().unwrap() / 299792458.;
+    let transmit_power: Vec<f64> = m["fits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(fit_transmit_power)
+        .collect::<anyhow::Result<_>>()?;
     let hash = format!(
         "{:x}",
         Sha256::digest(
             [
                 source.as_slice(),
                 notebook.as_slice(),
-                b"millstone-magic-constant-v2"
+                b"millstone-magic-constant-v3"
             ]
             .concat()
         )
@@ -313,6 +331,12 @@ fn calibrate_density(s: &Store, q: CalibrationRequest) -> anyhow::Result<Value> 
         h.new_dataset_builder()
             .with_data(serde_json::to_vec(&checked)?.as_slice())
             .create("checked_points_json_utf8")?;
+        h.new_dataset_builder()
+            .with_data(&transmit_power)
+            .create("fit_transmitter_power_w")?
+            .new_attr_builder()
+            .with_data("W")
+            .create("units")?;
         h.new_dataset::<f64>()
             .shape([nt, nr, 4])
             .create("source_fit_parameters")?
@@ -353,7 +377,7 @@ fn calibrate_density(s: &Store, q: CalibrationRequest) -> anyhow::Result<Value> 
         for fit in m["fits"].as_array().unwrap() {
             let id = fit["id"].as_str().unwrap();
             let record = records.create_group(id)?;
-            let meta = json!({"id":id,"source_id":sid,"source_key":id,"station":"Millstone Hill","antenna":q.antenna,"channel":format!("{}-l",q.antenna.to_lowercase()),"mode":"lpi-30","kind":"ion_fit","start_unix_s":fit["start_unix_s"],"end_unix_s":fit["end_unix_s"],"radar_frequency_hz":m["radar_frequency_hz"],"density_semantics":"plasma_line_calibrated_density","density_units":"m^-3","calibration":m["calibration"]});
+            let meta = json!({"id":id,"source_id":sid,"source_key":id,"station":"Millstone Hill","antenna":q.antenna,"channel":format!("{}-l",q.antenna.to_lowercase()),"mode":"lpi-30","kind":"ion_fit","start_unix_s":fit["start_unix_s"],"end_unix_s":fit["end_unix_s"],"radar_frequency_hz":m["radar_frequency_hz"],"density_semantics":"plasma_line_calibrated_density","transmitter_w":fit["transmitter_w"],"transmit_power_normalization":"Already divided by recorded mean P_tx in source fitted proxy","density_units":"m^-3","calibration":m["calibration"]});
             record
                 .new_attr_builder()
                 .with_data(meta.to_string().as_str())

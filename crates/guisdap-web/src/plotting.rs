@@ -49,7 +49,7 @@ pub fn rectilinear(id: &str, values: &[f32], x: &[f64], y: &[f64]) -> Result<(),
         values,
         x.len(),
         y.len(),
-        &serde_json::json!({"bounds":[xe[0],xe[xe.len()-1],ye[0],ye[ye.len()-1]],"x_edges":xe,"y_edges":ye,"limits":[-limit,limit],"mode":2,"palette":1,"time":false,"external_navigation":true,"xlabel":"Frequency offset / MHz","ylabel":"Slant range / km"}),
+        &serde_json::json!({"bounds":[xe[0],xe[xe.len()-1],ye[0],ye[ye.len()-1]],"x_edges":xe,"y_edges":ye,"limits":[-limit,limit],"mode":2,"palette":1,"colormap":"plasma","title":"Plasma-line power / source units","time":false,"external_navigation":true,"xlabel":"Frequency offset / MHz","ylabel":"Slant range / km"}),
     )
 }
 

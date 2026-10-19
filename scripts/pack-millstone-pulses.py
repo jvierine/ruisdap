@@ -9,7 +9,6 @@ import json
 from pathlib import Path
 import h5py
 import numpy as np
-from scipy.signal import correlate,correlation_lags
 
 
 def rf(path):
@@ -25,8 +24,9 @@ def channel_delay(echo,tx,gate):
     # Estimate tx-h -> same-channel leakage delay from the full measured pulse,
     # including edge guards. Known catalogue delay must be converted to this frame.
     a=echo[gate[0]-40:gate[1]+80]; b=tx[gate[0]-40:gate[1]+80]
-    c=correlate(a,b,mode='full',method='fft');lags=correlation_lags(len(a),len(b));use=np.abs(lags)<=40
-    k=np.flatnonzero(use)[np.argmax(np.abs(c[use]))]
+    lags=np.arange(-40,41)
+    c=np.array([np.vdot(b[max(0,-lag):min(len(b),len(b)-lag)],a[max(0,lag):min(len(a),len(a)+lag)])for lag in lags])
+    k=int(np.argmax(np.abs(c)))
     delta=0.
     if 0<k<len(c)-1:
         z=np.abs(c[k-1:k+2]);den=z[0]-2*z[1]+z[2]

@@ -16,6 +16,7 @@ struct Args {
 #[derive(Subcommand)]
 enum Command {
     Process { manifest: PathBuf },
+    Fit { manifest: PathBuf },
     Cancel { input: PathBuf, output: PathBuf },
 }
 #[derive(Deserialize)]
@@ -77,6 +78,18 @@ fn main() -> Result<()> {
             let (pulses, diagnostics) = product::prepare(&p)?;
             product::write(&output, &input, &p, &pulses, &diagnostics, None)?;
             println!("{}", serde_json::to_string_pretty(&diagnostics)?);
+        }
+        Command::Fit {manifest} => {
+            let m:guisdap_millstone::fitting::Manifest=serde_json::from_slice(&fs::read(manifest)?)?;
+            fs::create_dir_all(&m.output)?;
+            let mut failed=0;
+            let jobs=guisdap_millstone::fitting::jobs(&m)?;
+            ensure!(!jobs.is_empty(),"no calibrated antenna integrations");
+            for (job,inputs) in jobs.iter().enumerate().filter(|(i,_)|i%ranks==rank){
+                let output=m.output.join(format!("fit-{job:06}.h5"));
+                if let Err(e)=guisdap_millstone::fitting::run(inputs,&output,&m){failed+=1;eprintln!("rank {rank} fit {job}: {e:#}");}
+            }
+            ensure!(failed==0,"rank {rank}: {failed} fit jobs failed");
         }
         Command::Process { manifest } => {
             let m: Manifest = serde_json::from_slice(&fs::read(manifest)?)?;

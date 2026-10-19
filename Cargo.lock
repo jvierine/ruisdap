@@ -604,6 +604,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "guisdap-ion",
  "hdf5-metno",
  "mpi",
  "nalgebra",
@@ -1424,7 +1425,7 @@ dependencies = [
 [[package]]
 name = "rustplotlib-web"
 version = "0.1.0"
-source = "git+https://github.com/jvierine/rustplotlib?rev=5b8b8c327459b27942156e58cddb5292ffd52081#5b8b8c327459b27942156e58cddb5292ffd52081"
+source = "git+https://github.com/jvierine/rustplotlib?rev=be50f14ce89d2778f2db32433e7d9d27c8f53896#be50f14ce89d2778f2db32433e7d9d27c8f53896"
 dependencies = [
  "js-sys",
  "serde",

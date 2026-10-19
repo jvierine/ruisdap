@@ -13,6 +13,8 @@ use std::{
 };
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Configuration {
+    #[serde(default)]
+    pub instrument_metadata: serde_json::Value,
     pub station: String,
     pub antenna: String,
     pub channel: String,
@@ -196,7 +198,7 @@ pub fn write(
         let records = h.create_group("records")?;
         let r = records.create_group(&p.hash[..24])?;
         let c = &p.config;
-        let metadata = serde_json::json!({"id":&p.hash[..24],"source_id":&p.hash[..20],"source_key":"/","station":c.station,"antenna":c.antenna,"channel":c.channel,"mode":c.mode,"radar_frequency_hz":c.radar_frequency_hz,"start_unix_s":c.start_unix_s,"end_unix_s":c.end_unix_s,"kind":if fit.is_some(){"ion_acf"}else{"voltage_cancellation"},"signal_units":"K, transmit energy normalized to one; range response in lag design","complex_convention":"R(l)=x(t)conj(x(t+l)); original ADC data retained in input","cancellation":c.cancel_debris});
+        let metadata = serde_json::json!({"id":&p.hash[..24],"source_id":&p.hash[..20],"source_key":"/","station":c.station,"antenna":c.antenna,"channel":c.channel,"mode":c.mode,"radar_frequency_hz":c.radar_frequency_hz,"start_unix_s":c.start_unix_s,"end_unix_s":c.end_unix_s,"kind":if fit.is_some(){"ion_acf"}else{"voltage_cancellation"},"signal_units":if c.lpi.code_energy_samples.is_empty(){"K; legacy unit-energy pulse normalization"}else{"K km^-1; physical unit-peak pulse energy and range-cell measure removed per pulse"},"complex_convention":"R(l)=x(t)conj(x(t+l)); original ADC data retained in input","cancellation":c.cancel_debris});
         r.new_attr_builder()
             .with_data(metadata.to_string().as_str())
             .create("metadata")?;
@@ -232,6 +234,10 @@ pub fn write(
             let nr = c.lpi.range_end - c.lpi.range_start;
             let nl = c.lpi.lag_samples.len();
             let ion = r.create_group("ion_line")?;
+            if !c.lpi.code_energy_samples.is_empty(){
+                array(&ion,"code_energy_samples",&[pulses.len()],&c.lpi.code_energy_samples,"samples at unit peak power","pulse")?;
+                array(&ion,"range_cell_km",&[1],&[c.lpi.decimation as f64/c.lpi.sample_rate_hz*299792.458/2.],"km","scalar")?;
+            }
             let range: Vec<_> = (c.lpi.range_start..c.lpi.range_end)
                 .map(|i| {
                     i as f64 * c.lpi.decimation as f64 / c.lpi.sample_rate_hz * 299792458. / 2.
@@ -259,7 +265,7 @@ pub fn write(
                     name,
                     &[nr, nl, 2],
                     &data.iter().flat_map(|z| [z.re, z.im]).collect::<Vec<_>>(),
-                    "K",
+                    if c.lpi.code_energy_samples.is_empty(){"K"}else{"K km^-1; physical pulse-energy and range-cell normalization"},
                     "range,lag,complex_component",
                 )?;
             }
@@ -268,7 +274,7 @@ pub fn write(
                 "variance",
                 &[nr, nl],
                 &f.variance,
-                "K^2; circular complex variance approximation",
+                if c.lpi.code_energy_samples.is_empty(){"K^2; circular complex variance approximation"}else{"K^2 km^-2; circular complex variance approximation"},
                 "range,lag",
             )?;
             array(

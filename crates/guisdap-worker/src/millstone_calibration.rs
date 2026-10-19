@@ -218,13 +218,42 @@ fn calibrate_density(s: &Store, q: CalibrationRequest) -> anyhow::Result<Value> 
         .iter()
         .map(fit_transmit_power)
         .collect::<anyhow::Result<_>>()?;
+    let raw_times = m["raw_times"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("Missing raw times"))?
+        .clone();
+    let raw_gains = raw_receiver_gains(ds, &raw_times)?;
+    let raw_ranges = m["raw_range_m"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("Missing raw ranges"))?
+        .clone();
+    let original_raw = std::fs::read(
+        ds.manifest
+            .parent()
+            .unwrap()
+            .join(m["raw_url"].as_str().unwrap()),
+    )?;
+    anyhow::ensure!(
+        original_raw.len() == 4 * raw_times.len() * raw_ranges.len(),
+        "Raw array dimensions disagree"
+    );
+    let raw_ne: Vec<f64> = original_raw
+        .chunks_exact(4)
+        .enumerate()
+        .map(|(i, b)| {
+            // The source raw proxy already includes r_km²/P_tx, but not alpha.
+            // Assume Te/Ti=1 and a short lag: retain signed noise estimates.
+            f32::from_le_bytes(b.try_into().unwrap()) as f64 * 2. * gain
+                / raw_gains[i % raw_times.len()]
+        })
+        .collect();
     let hash = format!(
         "{:x}",
         Sha256::digest(
             [
                 source.as_slice(),
                 notebook.as_slice(),
-                b"millstone-magic-constant-v3"
+                b"millstone-magic-constant-v5"
             ]
             .concat()
         )
@@ -306,14 +335,26 @@ fn calibrate_density(s: &Store, q: CalibrationRequest) -> anyhow::Result<Value> 
             .unwrap()
             .strip_prefix(s.public.join("data"))?
             .to_string_lossy();
-        for field in ["raw_url", "plasma_url"] {
+        for field in ["plasma_url"] {
             let url = m[field].as_str().unwrap();
             m[field] = format!("/guisdap/data/{relative}/{url}").into();
         }
+        m["raw_url"] = "raw-ne.f32".into();
+        m["raw_density_semantics"] = "calibrated_short_lag_equivalent_density".into();
+        m["raw_units"] = "m^-3".into();
+        m["raw_definition"] = "2 C Re ACF(10 us) r_km^2 / (alpha Ptx_W); Te/Ti=1; small-Debye, short-lag equivalent; signed estimates retained".into();
+        std::fs::write(
+            out.join("raw-ne.f32"),
+            raw_ne
+                .iter()
+                .flat_map(|v| (*v as f32).to_le_bytes())
+                .collect::<Vec<_>>(),
+        )?;
         m["parameters_url"] = "parameters.f32".into();
         m["parameter_names"][0] = "Ne / m⁻³".into();
         m["density_semantics"] = "plasma_line_calibrated_density".into();
         m["calibration"] = json!({"gain":gain,"magic_constant":gain,"magic_constant_units":MAGIC_CONSTANT_UNITS,"revision":q.revision,"independent_fit_count":independent.len(),"gain_standard_error":se,"density_uncertainty":"Conditional source-amplitude and independent-fit gain error; Ti/Te covariance unavailable","method":"Bohm-Gross plasma density; finite-Debye integrated ion power. Density recomputed with source Ti/Te fixed; no new ACF fit.","sha256":hash});
+        m["calibration"]["points"] = checked.clone().into();
         std::fs::write(
             out.join("parameters.f32"),
             parameters
@@ -337,6 +378,42 @@ fn calibrate_density(s: &Store, q: CalibrationRequest) -> anyhow::Result<Value> 
             .new_attr_builder()
             .with_data("W")
             .create("units")?;
+        h.new_dataset::<f64>()
+            .shape([raw_ranges.len(), raw_times.len()])
+            .create("raw_ne_m3")?
+            .write_raw(&raw_ne)?;
+        let raw_dataset = h.dataset("raw_ne_m3")?;
+        raw_dataset
+            .new_attr_builder()
+            .with_data("m^-3")
+            .create("units")?;
+        raw_dataset
+            .new_attr_builder()
+            .with_data(&[1.0_f64])
+            .create("assumed_Te_over_Ti")?;
+        raw_dataset
+            .new_attr_builder()
+            .with_data(&[1e-5_f64])
+            .create("measured_lag_s")?;
+        h.new_dataset_builder()
+            .with_data(&raw_gains)
+            .create("raw_receiver_gain")?;
+        h.new_dataset_builder()
+            .with_data(
+                &raw_times
+                    .iter()
+                    .map(|v| v.as_f64().unwrap())
+                    .collect::<Vec<_>>(),
+            )
+            .create("raw_time_unix_s")?;
+        h.new_dataset_builder()
+            .with_data(
+                &raw_ranges
+                    .iter()
+                    .map(|v| v.as_f64().unwrap())
+                    .collect::<Vec<_>>(),
+            )
+            .create("raw_range_m")?;
         h.new_dataset::<f64>()
             .shape([nt, nr, 4])
             .create("source_fit_parameters")?
@@ -426,6 +503,15 @@ fn calibrate_density(s: &Store, q: CalibrationRequest) -> anyhow::Result<Value> 
         h.flush()?;
         drop(h);
         atomic_json(&out.join("manifest.json"), &m)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(out, std::fs::Permissions::from_mode(0o755))?;
+            for entry in std::fs::read_dir(out)? {
+                let entry=entry?;
+                if entry.file_type()?.is_file(){std::fs::set_permissions(entry.path(),std::fs::Permissions::from_mode(0o644))?;}
+            }
+        }
         std::fs::rename(out, &dest)?;
     }
     let configuration = s.public.join("catalog/millstone-config.json");

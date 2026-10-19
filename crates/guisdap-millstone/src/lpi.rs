@@ -9,6 +9,10 @@ use nalgebra::{DMatrix, DVector};
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Settings {
+    /// Physical pulse energy in samples at unit peak transmit power, one entry
+    /// per pulse. Supplied explicitly because pulse packs may be unit-energy.
+    #[serde(default)]
+    pub code_energy_samples: Vec<f64>,
     pub sample_rate_hz: f64,
     pub decimation: usize,
     pub lag_samples: Vec<usize>,
@@ -133,6 +137,8 @@ pub fn estimate_with_progress(
         "insufficient pulses or invalid LPI geometry"
     );
     let n = pulses[0].echo.len();
+    ensure!(s.code_energy_samples.is_empty() || (s.code_energy_samples.len()==pulses.len() && s.code_energy_samples.iter().all(|e|e.is_finite()&&*e>0.)), "one positive physical pulse energy is required per pulse");
+    let range_cell_km=s.decimation as f64/s.sample_rate_hz*299792.458/2.;
     ensure!(
         pulses.iter().all(|p| p.echo.len() == n
             && p.transmit.len() == n
@@ -247,7 +253,13 @@ pub fn estimate_with_progress(
                 .map(|(a, b)| a - b)
                 .collect();
             difference.push(lag_products(&zd, lag, s.decimation)?);
-            ambiguities.push(lag_products(&txs[pi], lag, s.decimation)?);
+            let mut ambiguity=lag_products(&txs[pi], lag, s.decimation)?;
+            // Restore physical unit-peak pulse energy removed by the TX
+            // normalization, and integrate the range basis in kilometres.
+            // Scaling each pulse's design permits mixed baud lengths; dividing
+            // the final average by one nominal baud does not.
+            if !s.code_energy_samples.is_empty(){for a in &mut ambiguity{*a*=s.code_energy_samples[pi]*range_cell_km;}}
+            ambiguities.push(ambiguity);
         }
         let nm = s.measurement_end - s.measurement_start;
         let robust: Vec<_> = (s.measurement_start..s.measurement_end)

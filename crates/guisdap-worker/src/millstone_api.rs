@@ -166,6 +166,55 @@ async fn values(State(s): State<Store>, Path(id): Path<String>) -> Result<Respon
         .into_response())
 }
 #[derive(Deserialize)]
+struct DatasetQuery {
+    date: String,
+    antenna: String,
+}
+fn raw_receiver_gains(d: &Dataset, times: &[Value]) -> anyhow::Result<Vec<f64>> {
+    let h = hdf5::File::open(d.manifest.with_file_name("raw-calibration-v2.h5"))?;
+    let actual = h.dataset("time_unix_s")?.read_raw::<f64>()?;
+    let gain = h.dataset("receiver_gain")?.read_raw::<f64>()?;
+    anyhow::ensure!(
+        actual.len() == times.len()
+            && gain.len() == times.len()
+            && actual
+                .iter()
+                .zip(times)
+                .all(|(a, b)| (a - b.as_f64().unwrap_or(f64::NAN)).abs() < 0.01)
+            && gain
+                .iter()
+                .all(|v| v.is_nan() || (v.is_finite() && *v > 0.)),
+        "Raw receiver gains do not match this product"
+    );
+    Ok(gain)
+}
+async fn dataset_products(State(s): State<Store>) -> Result<Json<Value>, Error> {
+    let active = s.public.join("catalog/millstone-config.json");
+    let path = if active.is_file() {
+        active
+    } else {
+        s.public.join("millstone-config.json")
+    };
+    let value = std::fs::read(path).map_err(fail)?;
+    Ok(Json(serde_json::from_slice(&value).map_err(fail)?))
+}
+async fn raw_calibration(
+    State(s): State<Store>,
+    Query(q): Query<DatasetQuery>,
+) -> Result<Json<Value>, Error> {
+    let v=tokio::task::spawn_blocking(move||->anyhow::Result<Value>{
+        let d=s.index.datasets.get(&format!("{}/{}",q.date,q.antenna)).ok_or_else(||anyhow::anyhow!("Unknown dataset"))?;
+        let m:Value=serde_json::from_slice(&std::fs::read(&d.manifest)?)?;
+        let gain=raw_receiver_gains(d,m["raw_times"].as_array().ok_or_else(||anyhow::anyhow!("Missing raw times"))?)?;
+        let h=hdf5::File::open(d.manifest.with_file_name("raw-calibration-v2.h5"))?;
+        let starts=h.dataset("fit_start_unix_s")?.read_raw::<f64>()?;
+        anyhow::ensure!(starts.len()==m["fits"].as_array().unwrap().len() && starts.iter().zip(m["fits"].as_array().unwrap()).all(|(a,f)|(a-f["start_unix_s"].as_f64().unwrap()).abs()<0.01),"Pointing times differ from fits");
+        let az=h.dataset("azimuth_deg")?.read_raw::<f64>()?;let el=h.dataset("elevation_deg")?.read_raw::<f64>()?;
+        Ok(json!({"azimuth_deg":az,"elevation_deg":el,"time_unix_s":m["raw_times"],"receiver_gain":gain,"temperature_ratio":1.,"definition":"Raw Ne = 2 C Re ACF(10 us) range_km^2 / (receiver_gain Ptx_W); short-lag equivalent, Te/Ti=1, small-Debye approximation"}))
+    }).await.map_err(fail)?.map_err(fail)?;
+    Ok(Json(v))
+}
+#[derive(Deserialize)]
 struct Selection {
     date: String,
     antenna: String,
@@ -203,6 +252,10 @@ pub fn router(state: PathBuf, public: PathBuf, calibration_root: PathBuf) -> Rou
         .unwrap_or_default();
     Router::new()
         .route(
+            "/guisdap/api/catalog/millstone/datasets",
+            get(dataset_products),
+        )
+        .route(
             "/guisdap/api/catalog/millstone/estimate",
             axum::routing::post(estimate_magic_constant),
         )
@@ -212,6 +265,10 @@ pub fn router(state: PathBuf, public: PathBuf, calibration_root: PathBuf) -> Rou
             get(values),
         )
         .route("/guisdap/api/catalog/millstone/acf", get(acf))
+        .route(
+            "/guisdap/api/catalog/millstone/raw-calibration",
+            get(raw_calibration),
+        )
         .route(
             "/guisdap/api/catalog/millstone/calibrate",
             axum::routing::post(recalibrate),

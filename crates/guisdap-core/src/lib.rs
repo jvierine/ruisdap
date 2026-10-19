@@ -517,6 +517,20 @@ fn ion_radar_factor(tx_w: f64) -> f64 {
         / (4. * std::f64::consts::PI * 1.380649e-23 * receiver_bandwidth)
 }
 
+/// Fourteen consecutive 10-us-lag subintegrations, in raw electron-density units.
+/// Their mean has the same calibration as the recorded five-second sum.
+/// Equal-duration slice timing is assigned by the exporter from record bounds.
+pub fn ion_short_slice_raw_ne(slices: &[f32], gain: f64, cal_k: f64, tx_w: f64) -> Result<Vec<f32>> {
+    ensure!(slices.len() == 14 * 431 * 2 && gain > 0. && cal_k > 0. && tx_w > 0., "invalid short-lag slice calibration");
+    let radar = ion_radar_factor(tx_w);
+    Ok((0..14).flat_map(|j| (0..431).map(move |i| {
+        let pairs = (i / 2 + 1).min(31) as f64;
+        let r = ion_short_range_km(i) * 1000.;
+        let factor = 2. * cal_k * r * r / (radar * 156.249999713498 * pairs);
+        (14. * factor * slices[(j * 431 + i) * 2] as f64 / gain) as f32
+    })).collect())
+}
+
 /// Signed 10-us raw-Ne equivalent using GUISDAP's peak spectral response.
 /// Linear in measured lag conditional on calibration. This is not a measured
 /// zero lag: decorrelation/Doppler and the absolute calibration remain model errors.
@@ -595,6 +609,11 @@ mod short_power_tests {
         }
         let mut p = process(&d, 1.).unwrap();
         let (ne, se) = ion_short_raw_ne(&p, 177.8, 1.2e6, 896.).unwrap();
+        let native = ion_short_slice_raw_ne(&p.ion_short_slices, p.ion_calibration - p.background[0], 177.8, 1.2e6).unwrap();
+        for i in 0..431 {
+            let mean = (0..14).map(|j| native[j * 431 + i] as f64).sum::<f64>() / 14.;
+            assert!((mean / ne[i] as f64 - 1.).abs() < 2e-6);
+        }
         for v in &ne {
             assert!((*v / ne[0] - 1.).abs() < 1e-6);
         }

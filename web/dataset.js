@@ -45,7 +45,7 @@ try{
   el('dataset-title').textContent=e.experiment;el('dataset-context').textContent=e.date+' · '+e.radar+' · UTC';
   for(const kind of ['plasma','ion']){
    const p=e.products.find(p=>p.complete&&p.label.toLowerCase().startsWith(kind+'-line'));
-   if(p){const link=p.link.startsWith('./?')?p.link.replace('./?','plasma.html?'):p.link;const u=new URL(link,location.href);u.searchParams.set('experiment',e.id);routes[kind]=u.pathname+u.search;}
+   if(p){const link=p.link.startsWith('./?')?p.link.replace('./?','plasma.html?'):p.link;const u=new URL(link,location.href);u.searchParams.delete('original');u.searchParams.set('experiment',e.id);routes[kind]=u.pathname+u.search;}
   }
   if(!Object.keys(routes).length){el('dataset-processing').hidden=false;el('dataset-process').disabled=!e.supported;el('dataset-status').textContent=e.supported?'A validated processing recipe is available.':'No validated processing recipe is configured for this experiment and date.';}
   el('dataset-process').addEventListener('click',async()=>{

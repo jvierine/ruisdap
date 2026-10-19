@@ -151,3 +151,54 @@ signal-loss and covariance effects still need end-to-end injections. The
 recalculation queue freezes reviewed EISCAT calibration revisions; a validated
 Millstone production refit recipe is not yet registered. These are not supplied
 by a successful display or a short MPI pilot.
+
+
+## Native run on 19 October 2026
+
+The explicit driver `scripts/prepare-millstone-native-run.py` selects observed
+monostatic coded pulses, validates recorded power, retains real same-code
+clutter partners, and imports the existing range–Doppler/CFAR detections. It
+measures the TX-to-receiver delay instead of assuming eleven samples. The
+current recipe is the 16 × 30 microsecond coded mode, 1 MHz sampling, a
+30-sample range basis and sixteen measured lags from 10 to 160 microseconds.
+Other modes still require their own declared timing recipe.
+
+On avaruus, 128 distinct one-second integrations (9,472 paired pulses) were run
+with 128 MPI ranks bound to 128 physical cores. The slowest rank took 58.5 s,
+excluding preparation. All requested ACF cells were finite. Of 1,096 seeded
+pulse echoes, 924 passed the removal checks, 37 received weak subtraction,
+and 135 failed (90 held-out excess, 44 coherent residual, one edge residual).
+Failed supports were masked from lag inversion. These are algorithm decisions,
+not independent ground truth. No target window hit the recorded ADC rails.
+
+Pulse normalization is explicit in `lpi.code_energy_samples`, one value per
+pulse at unit peak transmit power. The unit-energy ambiguity row is multiplied
+by that energy and `range_cell_km = c * decimation / (2 * sample_rate)`.
+The recovered ACF has units K/km; the corresponding calibration has units
+W m^-3 K^-1 km^-1. For a fixed-code old product,
+`C_native = C_legacy * code_energy_samples * range_cell_km`. Per-pulse scaling
+supports mixed code lengths. The inverse is checked against independent
+peak-power forward sums for 30 and 100 microsecond codes, mixed codes, and
+10/30/100-sample range bases. This does not validate antenna efficiencies or
+all receiver effects, and historical products keep their original definition.
+
+The native `fit MANIFEST` command also supports MPI. Its manifest supplies
+inputs, output, integration_s, magic_constant_by_antenna, ions, range_km,
+initial plasma state and fit settings. It removes each source's recorded
+transmit power before inverse-variance averaging, includes the finite receive
+FIR in the common ISR spectrum model, and writes canonical HDF5 fit arrays,
+model ACFs, full parameter covariance and standard errors. Calibration,
+composition, and shared-lag covariance are not included in those error bars.
+The first comparison produced four 180-second ZENITH profiles over 200–540 km,
+with explicit O+ composition. MISA was not assigned the ZENITH calibration.
+The products are experimental; the historical GUI dataset has not yet been
+replaced by these new fit products.
+
+BEATA native power is exported by
+`cargo run --release -p guisdap-worker --example export_beata_power -- INPUT_FRAMES NEW_OUTPUT`.
+The HDF5 retains 40,166 native profiles and their original altitude grids.
+Five resolutions of 256-column browser tiles contain arithmetic means before
+logarithmic colour mapping. The browser fetches only the visible resolution,
+keeps at most twelve tiles, and exposes approximately 0.357 s profiles when
+zoomed in. Slice timing is assigned uniformly within recorded five-second
+bounds; pulse-level timestamps are not available in those products.

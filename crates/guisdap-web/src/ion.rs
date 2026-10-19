@@ -128,6 +128,8 @@ struct Dataset {
 #[derive(Deserialize)]
 struct Location {
     #[serde(default)]
+    power_tiles_url: Option<String>,
+    #[serde(default)]
     instruments_url: Option<String>,
     datasets: Vec<Dataset>,
     #[serde(default)]
@@ -135,6 +137,7 @@ struct Location {
 }
 type MapKey = (u64, u64, usize, usize, usize, i64);
 struct Viewer {
+    power_tiles_url: Option<String>,
     instruments: Option<instruments::Data>,
     data: Data,
     time: usize,
@@ -308,7 +311,7 @@ fn time_altitude(v: &Viewer, param: usize) -> Result<(), JsValue> {
             flags[iy * nx + ix] = u8::from(flag);
         }
     }
-    let spec = serde_json::json!({"title":(["Ne / m⁻³","Ti / K","Te / K","Velocity / m s⁻¹","Raw Ne / m⁻³"][param]),"bounds":[start,end,bottom,top],"limits":v.scales[param],"mode":if param==0||param==4{1}else{0},"normalized":false,"palette":if param==3{0}else{1},"external_navigation":true,"ylabel":"Altitude / km"});
+    let spec = serde_json::json!({"title":(["Ne / m⁻³","Ti / K","Te / K","Velocity / m s⁻¹","Raw Ne / m⁻³"][param]),"bounds":[start,end,bottom,top],"limits":v.scales[param],"mode":if param==0||param==4{1}else{0},"normalized":false,"palette":if param==3{0}else{1},"external_navigation":true,"ylabel":"Altitude / km","power_tiles_url":v.power_tiles_url,"magic_constant":v.data.calibration.as_ref().map(|c|c.magic_constant)});
     raster::draw(
         &format!("fit-raster-{param}"),
         &pixels,
@@ -326,7 +329,9 @@ fn cursor(v: &Viewer, param: usize) {
     let x = ((p.start_unix + p.end_unix) / 2. - v.window_start) / (v.window_end - v.window_start);
     let y = (p.gates[v.upper].upper_km - g.altitude_km)
         / (p.gates[v.upper].upper_km - p.gates[v.lower].lower_km);
-    el(&format!("fit-cursor-{param}")).set_inner_html(&if (0. ..=1.).contains(&x){format!("<div class='fit-selection-cursor' style='left:calc(76px + (100% - 208px)*{x});top:22px;bottom:58px'><span style='top:{}%'></span></div>",y*100.)}else{String::new()});
+    let bottom=if param==4 {58} else {10};
+    let height=10+bottom;
+    el(&format!("fit-cursor-{param}")).set_inner_html(&format!("<div class='fit-selection-range' style='left:160px;right:180px;top:calc(10px + (100% - {height}px)*{y})'></div>{}",if (0. ..=1.).contains(&x){format!("<div class='fit-selection-cursor' style='left:calc(160px + (100% - 340px)*{x});top:10px;bottom:{bottom}px'></div>")}else{String::new()}));
 }
 
 fn acf(v: &Viewer, component: usize) -> String {
@@ -615,7 +620,7 @@ fn set_window(v: &mut Viewer, start: f64, end: f64) {
     let full_start = v.data.profiles[0].start_unix;
     let full_end = v.data.profiles.last().unwrap().end_unix;
     let width = (end - start)
-        .max(v.datasets[v.resolution].integration_s)
+        .max(if v.power_tiles_url.is_some(){1.0}else{v.datasets[v.resolution].integration_s})
         .min(full_end - full_start);
     v.window_start = start.clamp(full_start, full_end - width);
     v.window_end = v.window_start + width;
@@ -920,6 +925,7 @@ pub async fn start_ion() -> Result<(), JsValue> {
     let mut statuses = vec![None; location.datasets.len()];
     statuses[resolution] = data.processing.clone();
     let state = Rc::new(RefCell::new(Viewer {
+        power_tiles_url: location.power_tiles_url,
         instruments,
         window_start: data.profiles[0].start_unix,
         window_end: data.profiles.last().unwrap().end_unix,
@@ -937,11 +943,11 @@ pub async fn start_ion() -> Result<(), JsValue> {
         refresh_busy: false,
         drag: None,
         scales: [
-            [1e8, 1e13],
-            [0., 2000.],
+            [1e10, 1e12],
+            [0., 3000.],
             [0., 4000.],
-            [-1000., 1000.],
-            [1e8, 1e13],
+            [-200., 200.],
+            [1e9, 1e12],
         ],
         quality_limit: 10.,
         quality: guisdap_core::quality::Limits::default(),
@@ -1344,8 +1350,9 @@ pub async fn start_ion() -> Result<(), JsValue> {
 }
 
 fn selection(region: Option<(f64, f64, f64, f64, f64, f64)>) {
-    let html=region.map_or(String::new(),|(x0,x1,y0,y1,t0,t1)|format!("<div style='position:absolute;left:calc(76px + (100% - 208px)*{});top:calc(22px + (100% - 80px)*{});width:calc((100% - 208px)*{});height:calc((100% - 80px)*{});border:1px solid #236b8e;background:#236b8e22'><span style='background:#fff;color:#236b8e'>{}–{} UTC</span></div>",x0.min(x1),y0.min(y1),(x1-x0).abs(),(y1-y0).abs(),clock(t0.min(t1)),clock(t0.max(t1))));
     for i in 0..5 {
+        let inset=if i==4{68}else{20};
+        let html=region.map_or(String::new(),|(x0,x1,y0,y1,t0,t1)|format!("<div style='position:absolute;left:calc(160px + (100% - 340px)*{});top:calc(10px + (100% - {inset}px)*{});width:calc((100% - 340px)*{});height:calc((100% - {inset}px)*{});border:1px solid #236b8e;background:#236b8e22'><span style='background:#fff;color:#236b8e'>{}–{} UTC</span></div>",x0.min(x1),y0.min(y1),(x1-x0).abs(),(y1-y0).abs(),clock(t0.min(t1)),clock(t0.max(t1))));
         el(&format!("fit-selection-{i}")).set_inner_html(&html);
     }
 }

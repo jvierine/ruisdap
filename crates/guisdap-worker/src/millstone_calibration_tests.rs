@@ -11,9 +11,27 @@ mod product_tests {
         std::fs::create_dir_all(web.join("catalog")).unwrap();
         let t = 1712599200.;
         let mf = data.join("manifest.json");
-        let manifest = json!({"date":"2024-04-08","antenna":"ZENITH","radar_frequency_hz":440.2e6,"range_m":[300000.,304500.],"fits":[{"id":"fit","transmitter_w":1e6,"start_unix_s":t,"end_unix_s":t+180.,"parameters":[[3500.,1000.,2000.,0.],[3500.,1000.,2000.,0.]]}],"parameter_names":["proxy","Ti","Te","v"],"raw_url":"raw.f32","plasma_url":"plasma.f32"});
+        let manifest = json!({"date":"2024-04-08","antenna":"ZENITH","radar_frequency_hz":440.2e6,"range_m":[300000.,304500.],"fits":[{"id":"fit","transmitter_w":1e6,"start_unix_s":t,"end_unix_s":t+180.,"parameters":[[3500.,1000.,2000.,0.],[3500.,1000.,2000.,0.]]}],"parameter_names":["proxy","Ti","Te","v"],"raw_times":[t,t+10.],"raw_range_m":[300000.,304500.],"raw_url":"raw.f32","plasma_url":"plasma.f32"});
         std::fs::write(&mf, serde_json::to_vec(&manifest).unwrap()).unwrap();
         let before = std::fs::read(&mf).unwrap();
+        std::fs::write(
+            data.join("raw.f32"),
+            [10_f32, 20., -5., f32::NAN]
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        let raw = hdf5::File::create(data.join("raw-calibration-v2.h5")).unwrap();
+        raw.new_dataset_builder()
+            .with_data(&[t, t + 10.])
+            .create("time_unix_s")
+            .unwrap();
+        raw.new_dataset_builder()
+            .with_data(&[2_f64, 4.])
+            .create("receiver_gain")
+            .unwrap();
+        drop(raw);
         std::fs::write(web.join("millstone-config.json"),br#"{"datasets":[{"date":"2024-04-08","antenna":"ZENITH","data_root":"data/source/zenith/"},{"date":"2024-04-08","antenna":"MISA","data_root":"data/source/misa/"}]}"#).unwrap();
         let key = "a".repeat(64);
         std::fs::create_dir_all(cal.join(&key)).unwrap();
@@ -124,6 +142,11 @@ mod product_tests {
         .unwrap();
         assert_eq!(config["datasets"][1]["data_root"], "data/source/misa/");
         let path = web.join(config["datasets"][0]["data_root"].as_str().unwrap());
+        #[cfg(unix)] {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode()&0o777,0o755);
+            for file in ["manifest.json","parameters.f32","raw-ne.f32","calibration.h5"] {assert_eq!(std::fs::metadata(path.join(file)).unwrap().permissions().mode()&0o777,0o644);}
+        }
         let product: Value =
             serde_json::from_slice(&std::fs::read(path.join("manifest.json")).unwrap()).unwrap();
         assert!((product["fits"][0]["parameters"][0][0].as_f64().unwrap() / ne - 1.).abs() < 1e-12);
@@ -156,6 +179,17 @@ mod product_tests {
                 < 1e-12
         );
         assert!(h.group("records/fit/fit").is_ok());
+        let raw = h.dataset("raw_ne_m3").unwrap().read_raw::<f64>().unwrap();
+        assert!((raw[0] / (10. * expected) - 1.).abs() < 1e-12);
+        assert!((raw[1] / (10. * expected) - 1.).abs() < 1e-12);
+        assert!((raw[2] / (-5. * expected) - 1.).abs() < 1e-12);
+        assert!(raw[3].is_nan());
+        assert_eq!(product["raw_units"], "m^-3");
+        assert_eq!(product["raw_url"], "raw-ne.f32");
+        assert!(product["raw_definition"]
+            .as_str()
+            .unwrap()
+            .contains("Te/Ti=1"));
         assert_eq!(
             h.dataset("fit_transmitter_power_w")
                 .unwrap()

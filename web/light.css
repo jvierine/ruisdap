@@ -46,3 +46,55 @@ canvas{background:#fff}.scientific-field{padding:14px 0}.selected-time{backgroun
 @media(max-width:700px){.shared-colour-controls{margin-left:76px;gap:8px}.shared-colour-controls label{grid-template-columns:110px 110px 70px}.selected-range-controls{grid-template-columns:1fr}.acf-grid{grid-template-columns:1fr}}
 
 .legacy-plasma .axis-chart{display:block}.legacy-plasma .axis-chart>.y-label,.legacy-plasma .y-ticks,.legacy-plasma .x-axis,.legacy-plasma .scale{display:none}.legacy-plasma .plot{padding:14px 0}.legacy-plasma .plot-title{padding-left:76px}.legacy-plasma #profile{position:relative}.scientific-heading{font:20px RustplotlibPagella,Palatino,serif;color:#314858}.individual-plasma .ion-raster{height:380px}
+
+/* Parameter maps share one UTC axis and spend vertical space on measurements. */
+.shared-colour-controls[hidden],.shared-colour-controls button[hidden]{display:none!important}
+.scientific-colour-hit{position:absolute;z-index:4;padding:0;border:0;background:transparent!important;cursor:pointer;border-radius:0}
+.scientific-colour-hit:hover,.scientific-colour-hit:focus-visible{outline:1px solid #236b8e;outline-offset:2px}
+.parameter-stack>.parameter-row{margin:0;padding:0;border:0;border-radius:0}
+.parameter-stack>.parameter-row>h3,.parameter-stack>.parameter-row>.plot-title{margin:0!important;padding:0 0 0 76px!important;font:18px/26px RustplotlibPagella,Palatino,serif}
+.parameter-stack>.parameter-row>.plot-title b{font:inherit}
+.parameter-stack .ion-raster{height:350px}
+.parameter-stack .shared-time-last .ion-raster{height:398px}
+#plasma-timeline .ion-raster{height:560px}
+.individual-plasma .ion-raster{height:520px}
+.shared-time-row .ion-colorbar-hit{top:10px!important;height:calc(100% - 20px)!important}
+.shared-time-last .ion-colorbar-hit{height:calc(100% - 68px)!important}
+.shared-time-row .fit-selection-cursor{top:10px!important;bottom:10px!important}
+.shared-time-last .fit-selection-cursor{bottom:58px!important}
+
+.plasma-profile-pair{display:grid;grid-template-columns:minmax(0,1fr) clamp(165px,17%,230px);gap:8px;align-items:start}
+.plasma-profile-pair>div{min-width:0}
+.plasma-profile-pair #plasma-density-profile>.plot{border:0;margin:8px 0;padding:12px 0}
+.plasma-profile-pair #plasma-density-profile h3{font:20px RustplotlibPagella,Palatino,serif;margin:4px 0 4px 12px;line-height:normal}
+.plasma-profile-pair .caption:empty{display:none}
+
+.shared-time-row canvas[id$=-quality]{top:10px!important;height:calc(100% - 20px)!important}
+.shared-time-last canvas[id$=-quality]{height:calc(100% - 68px)!important}
+
+.parameter-stack>.parameter-row>h3,.parameter-stack>.parameter-row>.plot-title{display:none!important}
+.scientific-range-cursor{position:absolute;border-top:1px solid #67491c;box-shadow:0 1px #ffffffa0;pointer-events:none;z-index:3}
+.scientific-cursor{box-shadow:1px 0 #ffffffa0}
+.instrument-stack>div{margin:0;padding:0}
+.instrument-stack .caption:empty{display:none}
+
+.fit-selection-range{position:absolute;border-top:1px solid #67491c;box-shadow:0 1px #ffffffa0;pointer-events:none}
+
+.scientific-map>h3,.plasma-profile-pair #plasma-density-profile h3{display:none}
+
+.scientific-math-label{position:absolute;height:20px;width:auto;max-width:none;pointer-events:none;z-index:5}
+.scientific-math-label[hidden]{display:none!important}
+.scientific-curve{position:relative}
+.profile-math-heading{height:24px;width:auto}
+.scientific-extra-axis{position:absolute;pointer-events:none;background:transparent;z-index:1}
+.multi-axis-legend{position:absolute;display:flex;flex-wrap:wrap;gap:12px;font:13px RustplotlibPagella,Palatino,serif;pointer-events:none}
+.multi-axis-legend span::before{content:'━ ';font-weight:bold}
+
+.shared-time-row .ion-colorbar-hit{right:48px!important}
+
+/* Calibration plots lead; status text takes only the space it needs. */
+.legacy-plasma .analysis-heading{margin:8px 0}.legacy-plasma .analysis-heading h1{display:none}.legacy-plasma .section-head{margin:8px 0}.legacy-plasma .section-head h2{font-size:16px}.legacy-plasma #cal-selection,.legacy-plasma #cal-result,.legacy-plasma #cal-save-status,.legacy-plasma #cal-summary,.legacy-plasma #cal-analysis-used,.legacy-plasma #cal-fit-summary{height:auto!important;min-height:0!important;margin:6px 0}.legacy-plasma .time-stack{gap:6px}.legacy-plasma .broad-panel{margin:4px 0}.legacy-plasma .plasma-observation{margin:4px 0}
+
+.legacy-plasma #decoded{z-index:1}.legacy-plasma #decoded-wrapper{height:520px}.legacy-plasma .animation-grid>article:first-child .ion-raster{height:520px}.legacy-plasma .animation-grid{grid-template-columns:minmax(0,1fr) minmax(180px,.25fr)}
+
+.instrument-row{padding:0!important;margin:0!important;border:0!important;border-radius:0!important}

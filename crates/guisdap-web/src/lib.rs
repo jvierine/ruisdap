@@ -204,7 +204,7 @@ fn draw(
         v,
         width,
         height,
-        &serde_json::json!({"bounds":bounds,"limits":limits,"mode":if id=="power"{1}else{2},"normWidth":limit as f64/8.,"palette":if !positive{0}else{1},"time":id!="decoded","external_navigation":true,"xlabel":"Frequency offset / MHz","ylabel":if id.starts_with("broad"){"Frequency offset / MHz"}else{"Altitude / km"}}),
+        &serde_json::json!({"bounds":bounds,"limits":limits,"mode":if id=="power"{1}else{2},"normWidth":limit as f64/8.,"palette":1,"colormap":"plasma","title":if id=="power"{"Raw Ne / m⁻³"}else{"Plasma-line power / source units"},"time":id!="decoded","external_navigation":true,"xlabel":"Frequency offset / MHz","ylabel":if id.starts_with("broad"){"Frequency offset / MHz"}else{"Altitude / km"}}),
     )?;
     let canvas = el(id);
     let cursor_id = format!("{id}-time-cursor");

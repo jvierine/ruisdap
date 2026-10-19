@@ -19,8 +19,13 @@ fn physical_fit_survives_different_powers_and_pulse_normalizations(){
   let values:Vec<_>=lags.iter().map(|lag|f.iter().zip(&s).zip(&response).enumerate().map(|(j,((&f,&s),&h))|C::from_polar(pt/(gain*(range/1000.).powi(2))*250.*h*truth.electron_density_m3*s*if j==0||j==800{0.5}else{1.},-2.*std::f64::consts::PI*f*lag)).sum::<C>()).flat_map(|z|[z.re,z.im]).collect();array(&g,"acf",&[1,16,2],&values);array(&g,"variance",&[1,16],&vec![(pt/1e6_f64*0.01).powi(2);16]);paths.push(path);
  }
  let manifest=serde_json::json!({"inputs":paths,"output":tmp.path().join("out"),"integration_s":180.,"magic_constant_by_antenna":{"ZENITH":gain},"ions":ions,"range_km":[290.,310.],"initial":{"electron_density_m3":2e11,"ion_temperature_k":1000.,"electron_temperature_k":1500.,"velocity_m_s":0.,"ion_collision_s":0.}});
- let m:fitting::Manifest=serde_json::from_value(manifest).unwrap();let output=tmp.path().join("fit.h5");fitting::run(&paths,&output,&m).unwrap();let h=hdf5::File::open(output).unwrap();let p=h.dataset("records/record/ion_fit/parameters").unwrap().read_raw::<f64>().unwrap();
+ let m:fitting::Manifest=serde_json::from_value(manifest).unwrap();let output=tmp.path().join("fit.h5");fitting::run(&paths,&output,&m).unwrap();let h=hdf5::File::open(&output).unwrap();let p=h.dataset("records/record/ion_fit/parameters").unwrap().read_raw::<f64>().unwrap();
  for (got,want)in p.iter().zip([4e11,900.,1800.,80.,0.]){assert!((got-want).abs()<want.abs().max(1.)*0.002,"{got} != {want}");}
  let e=h.dataset("records/record/ion_fit/standard_error").unwrap().read_raw::<f64>().unwrap();assert!(e[..4].iter().all(|e|e.is_finite()&&*e>0.));
+ let k=model.wavenumber();let frequency=((truth.electron_density_m3*(1.602176634e-19_f64).powi(2)/(8.8541878188e-12*9.1093837139e-31)+3.*k*k*1.380649e-23*truth.electron_temperature_k/9.1093837139e-31).sqrt())/std::f64::consts::TAU;
+ let estimate=fitting::calibration(&fitting::CalibrationPoint{fit:output.clone(),range_m:range,frequency_hz:frequency}).unwrap();
+ assert!((estimate["magic_constant"].as_f64().unwrap()/gain-1.).abs()<0.002);
+ assert!((estimate["plasma_density_m3"].as_f64().unwrap()/truth.electron_density_m3-1.).abs()<0.002);
+ assert!(fitting::calibration(&fitting::CalibrationPoint{fit:output,range_m:range,frequency_hz:0.}).is_err());
  let _=fs::metadata(tmp.path()).unwrap();
 }

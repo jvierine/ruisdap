@@ -17,6 +17,7 @@ struct Args {
 enum Command {
     Process { manifest: PathBuf },
     Fit { manifest: PathBuf },
+    EstimateCalibration { manifest: PathBuf },
     Cancel { input: PathBuf, output: PathBuf },
 }
 #[derive(Deserialize)]
@@ -25,6 +26,10 @@ struct Manifest {
     output: PathBuf,
     #[serde(default)]
     live_directory: Option<PathBuf>,
+    #[serde(default)]
+    lpi_range: Option<[usize;2]>,
+    #[serde(default)]
+    measurement_range: Option<[usize;2]>,
 }
 fn atomic_json(path: &Path, value: &serde_json::Value) -> Result<()> {
     let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
@@ -79,6 +84,12 @@ fn main() -> Result<()> {
             product::write(&output, &input, &p, &pulses, &diagnostics, None)?;
             println!("{}", serde_json::to_string_pretty(&diagnostics)?);
         }
+        Command::EstimateCalibration {manifest} => {
+            ensure!(ranks==1,"calibration estimate takes one rank");
+            let points:Vec<guisdap_millstone::fitting::CalibrationPoint>=serde_json::from_slice(&fs::read(manifest)?)?;
+            let estimates:Vec<_>=points.iter().map(guisdap_millstone::fitting::calibration).collect::<Result<_>>()?;
+            println!("{}",serde_json::to_string(&estimates)?);
+        }
         Command::Fit {manifest} => {
             let m:guisdap_millstone::fitting::Manifest=serde_json::from_slice(&fs::read(manifest)?)?;
             fs::create_dir_all(&m.output)?;
@@ -114,7 +125,9 @@ fn main() -> Result<()> {
                     start,
                 )?;
                 let result = (|| -> Result<()> {
-                    let p = product::read(input)?;
+                    let mut p = product::read(input)?;
+                    if let Some([lo,hi])=m.lpi_range{p.config.lpi.range_start=lo;p.config.lpi.range_end=hi;}
+                    if let Some([lo,hi])=m.measurement_range{p.config.lpi.measurement_start=lo;p.config.lpi.measurement_end=hi;}
                     ensure!(
                         p.samples
                             .iter()

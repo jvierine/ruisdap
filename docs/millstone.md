@@ -234,10 +234,97 @@ schema and native executable identity before retaining completed products. The
 remaining inputs are distributed by descending CFAR-detection work estimate.
 Resume audits are HDF5; no completed waveform or ACF product is overwritten.
 
-The completed full-day 8 April run is registered as `native-full-20261019`: all
-5,540 eligible integrations produced ACFs, and 295 time buckets produced native
+The original 8 April sampled trial is registered as `native-full-20261019`:
+5,540 selected integrations produced ACFs, and 295 time buckets produced native
 fits, spanning 00:16:40–23:59:56 UTC. The viewer was checked against canonical
 HDF5 arrays and every input is represented once. Across 22,125 fitted range
 gates, 11,863 converged, 1,905 were low-information, 4,399 did not converge and
 3,958 reached parameter boundaries. These flags are retained; completion is not
 a claim that every gate is a usable fit or that cancellation bias is validated.
+
+
+### 2026-10-19 coverage audit and corrected eclipse processing
+
+The original `native-full-20261019` export is an incomplete sampled trial,
+not an all-pulse day reduction. Its input builder required an exact per-second
+power-meter file, while the archive records power at five-second cadence. It
+therefore retained only 5,540 one-second coded packs (406,172 pulses; 5,385 s
+wall exposure), omitted the long-pulse waveform, used 16 lags, decoded only
+126–535 km and fitted only 200–540 km. The catalogue now labels it incomplete;
+its immutable products remain available for inspection.
+
+The corrected driver is `scripts/process-millstone-eclipse.py`, launched in
+`ruisdap-millstone-eclipse-all-20261019.service`. It processes April 8, April 7
+and April 9 sequentially, with 128 physical MPI cores and experimental
+CFAR-seeded complex-voltage satellite subtraction. The server archive covers
+April 7 about 10 UTC through April 9 about 11 UTC; the boundary days are partial.
+A frozen executable and full source pulse-pack hashes identify the numerical
+run. Input preparation interpolates the recorded power-meter series, retains
+real cross-boundary clutter partners without counting them as science pulses,
+and records an exact unique science-pulse audit in HDF5.
+
+A checked 18:00:10–18:00:20 UTC pilot contains all 748 coded and 374 long science
+pulses in the metadata window, plus three separately identified clutter partners.
+Both native reductions contain 240 range cells (0–1,074.756 km) and 45 measured
+lags (10–450 microseconds). At 200–500 km the median real short-lag amplitude
+ratio to the response-normalized historical ACF was 0.959 in this pilot. That is
+an input/normalization check, not validation of full-day fitted plasma parameters
+or of satellite-removal bias. Negative and unidentifiable estimates remain
+stored with their quality flags.
+
+Campaign fits use the actual historical integration windows, the original
+range-averaging radii 2/3/5 at 0–300/300–700/700–1500 km, below-300-km paired
+clutter ACFs, the Holt 32/16-amu molecular-ion prescription, three initial guesses
+and historical Ti, Te/Ti and velocity bounds. Above 700 km the current Rust
+implementation profiles O+/H+ on a composition grid. This is explicitly distinct
+from the old continuous composition fit. The physical finite-filter,
+finite-Debye forward model and propagated diagonal measurement errors are also
+retained rather than copying historical free-amplitude and error approximations.
+The legacy slice is end-exclusive: its actual interior averages contain 4/6/10 cells, despite the stored nominal widths of 5/7/11 cells. The matching path uses the actual slices. The archive's fourth-moment, shared-lag and range covariance remain incomplete.
+
+Native analyses now support independent calibration notebooks, automatic C
+estimation using the measured complex ACF and the exact fitted receiver/model
+response, and authenticated application through a new 128-core ACF refit.
+The estimator evaluates the Bohm–Gross plasma-line density at conditional
+source Ti, Te, velocity and composition and solves the weighted real amplitude
+projection for C. It verifies source HDF5 hashes, rejects unmatched/nonconverged
+points explicitly, groups by native fit, and reports between-fit scaled MAD.
+Applying C preserves the original analysis, writes canonical HDF5 fits and a
+calibration audit, and adds a separate catalogue choice. It does not merely
+rescale fitted Ne. Native C has units W m^-3 K^-1 km^-1; initial campaign C is
+transferred from the frozen reviewed April 8 same-antenna calibration. Other
+days' context is exported from their own archive products and labels that transfer.
+
+Instrument traces share the common ISR plot, bridge gaps shorter than an hour,
+and use blue azimuth, purple elevation, green Tsys and orange transmit power.
+The shared view retains the same inner time-axis extent as the parameter maps.
+
+Native calibration refits run as tracked server jobs; the UI polls only while the calibration view is visible, resumes an existing job after reload, and reports interrupted jobs after server restart. The campaign progress heartbeat exits with its explicitly launched systemd job and never schedules a restart.
+
+## Bounded real-data benchmark (19 October 2026)
+
+Memo 39 records a ten-second, 1,122-science-pulse ZENITH workload: 748 coded
+and 374 long pulses, 45 measured lags and 240 requested range cells. On one
+pinned EPYC 9754 physical core, three-repeat median LPI times were 21.403 s
+(coded) and 10.503 s (long). An independent NumPy/SciPy replay of the same
+operator took 53.077 and 25.438 s. The ACF peak-relative discrepancies were
+5.99e-14 and 2.67e-11; variances, clutter ACFs, retained fractions and receiver
+gains were also checked. This is not a direct historical-controller benchmark.
+
+The reproducible harnesses are `examples/benchmark_lpi.rs`,
+`examples/benchmark_cancellation.rs`, `scripts/benchmark-millstone-lpi-reference.py`
+and `scripts/benchmark-millstone-pipeline.py`. `scripts/collect-millstone-benchmark.py`
+freezes timing arrays, configuration, source hashes and numerical checks into
+HDF5. The bounded snapshot uses explicit avaruus pilot paths; use a fresh
+output version when repeating it.
+
+Two complete process-command repeats took 33.847–33.938 s with one MPI rank
+and 23.380–23.448 s with two ranks. There are only two unequal jobs: do not
+extrapolate this measurement to 128 ranks. The pilot has zero CFAR seeds.
+Separate five-repeat cancellation measurements of the three Memo 38 echoes
+were 0.793, 0.789 and 0.774 s/echo, retaining the accept/reject/reject decisions.
+These exclude catalogue construction and input I/O. Fresh archive preparation
+was 47.25 s including three hours of metadata discovery; this is startup cost,
+not an hourly-worker steady-state cost. A single short-pilot plasma fit took
+134.47 s; the low convergence count is not representative of scientific
+200–300 s integrations.

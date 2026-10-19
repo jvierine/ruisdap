@@ -246,6 +246,15 @@ pub fn router(state: PathBuf, public: PathBuf, calibration_root: PathBuf) -> Rou
             .trim()
             .to_string(),
     );
+    // systemd terminates child refits with this service. Never leave a stale
+    // running state after restart; immutable source products remain untouched.
+    if let Ok(entries)=std::fs::read_dir(calibration_root.join("native-jobs")){
+        for entry in entries.flatten(){let path=entry.path();if path.extension().is_some_and(|x|x=="json"){
+            if let Ok(bytes)=std::fs::read(&path){if serde_json::from_slice::<Value>(&bytes).ok().is_some_and(|v|v["status"]=="running"){
+                let _=atomic_json(&path,&json!({"status":"failed","error":"Calibration was interrupted by a server restart. The source analysis is preserved; retry the refit."}));
+            }}
+        }}
+    }
     let index = std::fs::read(state.join("millstone-sources.json"))
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
@@ -259,6 +268,7 @@ pub fn router(state: PathBuf, public: PathBuf, calibration_root: PathBuf) -> Rou
             "/guisdap/api/catalog/millstone/estimate",
             axum::routing::post(estimate_magic_constant),
         )
+        .route("/guisdap/api/catalog/millstone/calibration-jobs/{id}",get(native_calibration_job))
         .route("/guisdap/api/catalog/millstone/plasma/{id}", get(metadata))
         .route(
             "/guisdap/api/catalog/millstone/plasma/{id}/values.f32",

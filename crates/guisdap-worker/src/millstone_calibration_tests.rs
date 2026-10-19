@@ -79,6 +79,7 @@ mod product_tests {
             revision: 3,
             date: "2024-04-08".into(),
             antenna: "ZENITH".into(),
+            analysis: None,
         };
         let expected = ion_proxy(ne, 2000., 1000., k) / 3500.;
         let preview = magic_constant_result(&s, &request()).unwrap();

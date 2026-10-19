@@ -138,11 +138,16 @@ pub fn prepare(p: &Pack) -> Result<(Vec<lpi::Pulse>, Vec<Diagnostic>)> {
     let mut pulses = Vec::new();
     let mut diagnostics = Vec::new();
     for i in 0..p.echo.len() {
+        let dc=&p.config.instrument_metadata["dc_offset"];
+        let dc=C::new(dc[0].as_f64().unwrap_or(0.),dc[1].as_f64().unwrap_or(0.));
+        let echo:Vec<_>=p.echo[i].iter().map(|z|*z-dc).collect();
+        let mut transmit=p.transmit[i].clone();
+        for z in &mut transmit[p.config.lpi.tx_gate[0]..p.config.lpi.tx_gate[1]]{*z-=dc;}
         let result = if p.config.cancel_debris {
             Some(
                 debris::cancel(
-                    &p.echo[i],
-                    &p.transmit[i],
+                    &echo,
+                    &transmit,
                     &p.detections[i],
                     p.config.lpi.sample_rate_hz,
                     p.config.lpi.noise_gate,
@@ -157,11 +162,11 @@ pub fn prepare(p: &Pack) -> Result<(Vec<lpi::Pulse>, Vec<Diagnostic>)> {
             diagnostics.push(c.diagnostic);
             (c.cleaned, c.usable)
         } else {
-            (p.echo[i].clone(), vec![true; p.echo[i].len()])
+            (echo, vec![true; p.echo[i].len()])
         };
         pulses.push(lpi::Pulse {
             echo: cleaned,
-            transmit: p.transmit[i].clone(),
+            transmit,
             pair: p.pair[i],
             usable,
         });

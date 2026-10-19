@@ -23,6 +23,7 @@ window.addEventListener('message',event=>{
  if(event.data?.type==='ruisdap-ready'){target.dataset.ready='true';document.body.dataset.readyMs=performance.now().toFixed(1);if(!target.hidden)el('dataset-status').textContent='';}
  if(event.data?.type==='ruisdap-error'&&!target.hidden)el('dataset-status').textContent='Unable to load measurements: '+event.data.message;
  if(event.data?.type==='ruisdap-height')target.style.height=Math.max(700,Math.min(100000,event.data.height))+'px';
+ if(event.data?.type==='ruisdap-day'&&canonical&&/^\d{4}-\d{2}-\d{2}$/.test(event.data.date)){const u=new URL(location.href);u.searchParams.set('date',event.data.date);u.searchParams.set('analysis',event.data.analysis||'historical');for(const k of ['time','range_m','start','end'])u.searchParams.delete(k);u.searchParams.set('view',active);location.assign(u);return;}
  if(event.data?.type==='ruisdap-analysis'&&canonical){const u=new URL(location.href);for(const k of ['analysis','time','range_m'])u.searchParams.set(k,event.data[k]);u.searchParams.delete('start');u.searchParams.delete('end');u.searchParams.set('view',active);location.assign(u);return;}
  if(event.data?.type==='ruisdap-time')for(const f of frames.values())if(f!==target)f.contentWindow.postMessage(event.data,location.origin);
 });

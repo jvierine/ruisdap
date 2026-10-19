@@ -33,7 +33,7 @@ def export(historical, fits, output, public):
     manifest.update(analysis_kind='native', analysis_id=output.name,
                     analysis_label='Rust experimental · 180 s ZENITH fits',
                     density_semantics='native_calibrated_ne_m3', fits=[], fit_times=[],
-                    analysis_note='Experimental Rust fits of sparsely sampled integrations; O+ composition, 200–540 km. Transmit power is removed per input before averaging. Raw Ne and plasma-line panels retain the historical calibrated context. Velocity toward/away sign is not yet validated.')
+                    analysis_note='Rust ACF fits. Recorded transmit power is removed per input before averaging; pulse energy and range measure are explicit. Raw Ne and plasma-line panels retain the source context. Velocity toward/away sign is not yet validated.')
     for key in ['raw_url', 'plasma_url']:
         url = original[key]
         manifest[key] = url if url.startswith('/') else '/guisdap/' + (historical / url).relative_to(public).as_posix()
@@ -79,7 +79,12 @@ def export(historical, fits, output, public):
                     model=[[None if v is None else v * 1e6 for v in row] for row in model],
                     status=status, reduced_chi_square=result['reduced_chi_square'] if result else None))
             start, end = config['start_unix_s'], config['end_unix_s']
-            exposure = sum(s['end_unix_s'] - s['start_unix_s'] for s in sources)
+            # Coded and long-pulse observations share time windows. Sum their
+            # union, not their overlapping spans, when reporting wall exposure.
+            intervals=sorted((s['start_unix_s'],s['end_unix_s'])for s in sources)
+            exposure=0.;last_end=-np.inf
+            for lo,hi in intervals:
+                exposure+=max(0.,hi-max(lo,last_end));last_end=max(last_end,hi)
             write_json(output / (name + '-acf.json'), dict(lag_s=lag, units='µK W⁻¹ km⁻¹', negative_lag_convention=True, gates=diagnostics))
             sha = hashlib.sha256(path.read_bytes()).hexdigest()
             shutil.copyfile(path, output / path.name)
@@ -90,10 +95,12 @@ def export(historical, fits, output, public):
                 system_temperature_k=float(np.mean(tsys)),
                 azimuth_deg=float(np.mean([s['azimuth_deg'] for s in sources])),
                 elevation_deg=float(np.mean([s['elevation_deg'] for s in sources])),
-                source_integrations=len(sources), exposure_s=exposure,
+                source_integrations=len(sources), exposure_s=exposure,science_pulses=sum(s.get('science_pulse_count')or 0 for s in sources),
                 diagnostics_url=name + '-acf.json', hdf5_url=path.name, sha256=sha))
             manifest['fit_times'].append((start + end) / 2)
             all_parameters.append(parameters)
+            manifest['native_integration_s']=assumptions.get('integration_s',180)
+            manifest['native_historical_settings']=assumptions.get('historical_settings',False)
             manifest['native_calibration'] = dict(gain=assumptions['calibration'], units=assumptions['calibration_units'])
     assert all_parameters, 'No native fits'
     manifest['range_m'] = ranges

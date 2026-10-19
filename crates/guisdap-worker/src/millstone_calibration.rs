@@ -6,6 +6,29 @@ struct CalibrationRequest {
     revision: u64,
     date: String,
     antenna: String,
+    #[serde(default)]
+    analysis: Option<String>,
+}
+// Native products are selected exclusively through the server-owned catalogue.
+// The client supplies an analysis identifier, never an executable or file path.
+fn native_calibration(s:&Store,q:&CalibrationRequest,apply:bool,job:Option<&std::path::Path>)->anyhow::Result<Value>{
+ use std::io::Write;
+ anyhow::ensure!(q.notebook_key.len()==64&&q.notebook_key.bytes().all(|v|v.is_ascii_hexdigit()),"Invalid notebook key");
+ let review:Value=serde_json::from_slice(&std::fs::read(s.calibration_root.join(&q.notebook_key).join("latest.json"))?)?;
+ anyhow::ensure!(review["revision"].as_u64()==Some(q.revision),"Calibration revision changed; reload before recalculating");
+ let config=s.public.join("catalog/millstone-config.json");
+ let catalogue:Value=serde_json::from_slice(&std::fs::read(&config)?)?;
+ let ds=catalogue["datasets"].as_array().ok_or_else(||anyhow::anyhow!("Invalid dataset catalogue"))?.iter().find(|d|d["date"]==q.date&&d["antenna"]==q.antenna).ok_or_else(||anyhow::anyhow!("Unknown dataset"))?;
+ let choice=ds["analyses"].as_array().ok_or_else(||anyhow::anyhow!("No native analyses"))?.iter().find(|a|a["id"].as_str()==q.analysis.as_deref()).ok_or_else(||anyhow::anyhow!("Unknown native analysis"))?;
+ let source=s.public.join(choice["data_root"].as_str().ok_or_else(||anyhow::anyhow!("Invalid analysis root"))?).canonicalize()?;
+ anyhow::ensure!(source.starts_with(s.public.join("data").canonicalize()?),"Analysis outside product root");
+ let repo=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();
+ let payload=json!({"source":source,"review":review,"apply":apply,"job_status_file":job,"public":s.public,"config":config,"private":s.calibration_root.join("native-runs"),"date":q.date,"antenna":q.antenna});
+ let mut child=std::process::Command::new(std::env::var("RUISDAP_PYTHON").unwrap_or_else(|_|"python3".into())).arg(repo.join("scripts/calibrate-millstone-native.py")).current_dir(repo).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn()?;
+ child.stdin.take().unwrap().write_all(&serde_json::to_vec(&payload)?)?;
+ let out=child.wait_with_output()?;
+ anyhow::ensure!(out.status.success(),"{}",String::from_utf8_lossy(&out.stderr));
+ Ok(serde_json::from_slice(&out.stdout)?)
 }
 fn median(mut v: Vec<f64>) -> f64 {
     v.sort_by(f64::total_cmp);
@@ -179,6 +202,7 @@ fn review_calibration(s: &Store, q: &CalibrationRequest) -> anyhow::Result<Revie
     })
 }
 fn magic_constant_result(s: &Store, q: &CalibrationRequest) -> anyhow::Result<Value> {
+    if q.analysis.is_some(){return native_calibration(s,q,false,None);}
     let r = review_calibration(s, q)?;
     let scatter = median(r.independent.iter().map(|v| (v - r.gain).abs()).collect()) * 1.4826;
     Ok(
@@ -196,6 +220,7 @@ async fn estimate_magic_constant(
     Ok(Json(result))
 }
 fn calibrate_density(s: &Store, q: CalibrationRequest) -> anyhow::Result<Value> {
+    if q.analysis.is_some(){return native_calibration(s,&q,true,None);}
     use sha2::{Digest, Sha256};
     let ReviewedCalibration {
         source,
@@ -548,6 +573,17 @@ async fn recalibrate(
             "Enter the processing key under Processing access.".into(),
         ));
     }
+    if q.analysis.is_some(){
+        use sha2::{Digest,Sha256};
+        let id=format!("{:x}",Sha256::digest(format!("{}:{:?}",q.notebook_key,std::time::SystemTime::now()).as_bytes()));
+        let directory=s.calibration_root.join("native-jobs");std::fs::create_dir_all(&directory).map_err(fail)?;
+        let path=directory.join(format!("{id}.json"));atomic_json(&path,&json!({"status":"running","phase":"Verifying calibration points"})).map_err(fail)?;
+        tokio::task::spawn_blocking(move||{
+            let result=match native_calibration(&s,&q,true,Some(&path)){Ok(result)=>json!({"status":"complete","result":result}),Err(e)=>json!({"status":"failed","error":e.to_string()})};
+            let _=atomic_json(&path,&result);
+        });
+        return Ok(Json(json!({"status":"running","status_url":format!("api/catalog/millstone/calibration-jobs/{id}"),"message":"Native calibration queued; its 128-core refit will preserve the source analysis."})));
+    }
     let v = tokio::task::spawn_blocking(move || calibrate_density(&s, q))
         .await
         .map_err(fail)?
@@ -572,4 +608,10 @@ mod calibration_tests {
         assert!(density(-1., 2000., 1000., 1.).is_nan());
         assert!(density(1e11, 0., 1000., 1.).is_nan());
     }
+}
+
+async fn native_calibration_job(State(s):State<Store>,Path(id):Path<String>)->Result<Json<Value>,Error>{
+ if id.len()!=64||!id.bytes().all(|b|b.is_ascii_hexdigit()){return Err(fail("Invalid calibration job"));}
+ let bytes=std::fs::read(s.calibration_root.join("native-jobs").join(format!("{id}.json"))).map_err(fail)?;
+ Ok(Json(serde_json::from_slice(&bytes).map_err(fail)?))
 }

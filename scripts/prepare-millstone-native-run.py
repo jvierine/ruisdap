@@ -6,6 +6,7 @@ with real adjacent same-code clutter partners enter an integration.
 import argparse,bisect,datetime as dt,hashlib,importlib.util,json
 from pathlib import Path
 import h5py,numpy as np
+from millstone_archive import recorded_power
 spec=importlib.util.spec_from_file_location('pulse_io',Path(__file__).with_name('pack-millstone-pulses.py'));io=importlib.util.module_from_spec(spec);spec.loader.exec_module(io)
 p=argparse.ArgumentParser();p.add_argument('--root',type=Path,required=True);p.add_argument('--start',type=int,required=True);p.add_argument('--scan-seconds',type=int,default=600);p.add_argument('--jobs',type=int,default=128,help='Maximum jobs; zero selects all valid integrations');p.add_argument('--antenna',choices=['ZENITH','MISA','both'],default='both');p.add_argument('--output',type=Path,required=True);p.add_argument('--resume',action='store_true');a=p.parse_args()
 if a.output.exists()and not a.resume:raise ValueError('choose a new run directory, or explicitly resume prepared inputs')
@@ -23,6 +24,12 @@ def antenna(k):
  r=ants[i][1]
  if r['rx_antenna']!=r['tx_antenna']:return None
  return r['rx_antenna'].decode(),r
+powers=[]
+for hdir in sorted({hour(t)for t in range(a.start-3600,a.start+a.scan_seconds+3600,3600)}):
+ for f in sorted((a.root/'metadata/powermeter'/hdir).glob('*.h5')):
+  with h5py.File(f)as h:
+   for k,g in h.items():powers.append((int(k),{n:float(g[n][()])for n in g},f))
+powers.sort(key=lambda r:r[0]);power_times=[x[0]for x in powers]
 inputs=[];catalogues={};rejected=[];ndet=0
 for second in range(a.start,a.start+a.scan_seconds):
  if a.jobs and len(inputs)>=a.jobs:break
@@ -30,12 +37,9 @@ for second in range(a.start,a.start+a.scan_seconds):
  if not idsfile.exists():continue
  with h5py.File(idsfile)as h:ids={int(k):int(g['sweepid'][()])for k,g in h.items()if 'sweepid'in g}
  if not any(1<=v<=32 for v in ids.values()):continue
- powerfile=a.root/'metadata/powermeter'/name/f'power@{second}.h5'
- if not powerfile.exists():continue
- with h5py.File(powerfile)as h:
-  powers=[(int(k),{n:float(g[n][()])for n in g})for k,g in h.items()]
  if not powers:continue
- power=min(powers,key=lambda r:abs(r[0]-second))[1]
+ powerfile=min(powers,key=lambda r:abs(r[0]-second))[2]
+ power={field:recorded_power(second,power_times,[x[1][field]for x in powers])for field in ['zenith_power','misa_power']}
  # A job contains one antenna and one-second RF source; skip switching pulses.
  for ant,channel in [('ZENITH','zenith-l'),('MISA','misa-l')]:
   if a.antenna!='both' and a.antenna!=ant:continue

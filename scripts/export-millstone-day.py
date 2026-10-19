@@ -5,7 +5,7 @@ The HDF5 output records units, source identities and all displayed signed values
 import argparse,datetime as dt,hashlib,json,os
 from pathlib import Path
 import h5py,numpy as np
-p=argparse.ArgumentParser();p.add_argument('root',type=Path);p.add_argument('output',type=Path);p.add_argument('--date',default='2024-04-08');a=p.parse_args()
+p=argparse.ArgumentParser();p.add_argument('root',type=Path);p.add_argument('output',type=Path);p.add_argument('--date',default='2024-04-08');p.add_argument('--antenna',choices=['ZENITH','MISA','both'],default='both');a=p.parse_args()
 start=dt.datetime.fromisoformat(a.date).replace(tzinfo=dt.timezone.utc).timestamp();end=start+86400
 if a.output.exists():raise ValueError('choose a new export version')
 a.output.mkdir(parents=True)
@@ -20,6 +20,7 @@ def utc(x):return dt.datetime.fromtimestamp(float(x),dt.timezone.utc).strftime('
 def f32(path,data):np.asarray(data,dtype='<f4').tofile(path)
 def source(path):return dict(path=str(path),size=path.stat().st_size,mtime_ns=path.stat().st_mtime_ns)
 for antenna,channel in [('ZENITH','zenith-l'),('MISA','misa-l')]:
+ if a.antenna not in ['both',antenna]:continue
  out=a.output/antenna.lower();out.mkdir();fits=[];raw=[];sources=[]
  folder=a.root/'lpi_30'/channel
  for path in sorted(folder.glob('pp-*.h5')):

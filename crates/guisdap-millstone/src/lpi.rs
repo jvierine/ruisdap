@@ -16,6 +16,10 @@ pub struct Settings {
     pub sample_rate_hz: f64,
     pub decimation: usize,
     pub lag_samples: Vec<usize>,
+    #[serde(default)]
+    pub minimum_range_index: Vec<usize>,
+    #[serde(default)]
+    pub science_pulse: Vec<bool>,
     pub range_start: usize,
     pub range_end: usize,
     pub measurement_start: usize,
@@ -154,6 +158,8 @@ pub fn estimate_with_progress(
             && s.measurement_end * s.decimation + s.lag_samples.iter().max().unwrap() <= n,
         "invalid gate timing"
     );
+    ensure!(s.science_pulse.is_empty()||s.science_pulse.len()==pulses.len(),"science pulse mask length mismatch");
+    ensure!(s.minimum_range_index.is_empty()||s.minimum_range_index.len()==s.lag_samples.len(),"minimum range index length mismatch");
     let nr = s.range_end - s.range_start;
     let nl = s.lag_samples.len();
     let cols = nr + usize::from(s.background_column);
@@ -312,6 +318,7 @@ pub fn estimate_with_progress(
         let mut yg = Vec::new();
         let mut sigma = Vec::new();
         for (pi, p) in pulses.iter().enumerate() {
+            if !s.science_pulse.is_empty()&&!s.science_pulse[pi]{continue;}
             for (mi, m) in (s.measurement_start..s.measurement_end).enumerate() {
                 let start = m * s.decimation;
                 let end = (m + 1) * s.decimation;
@@ -327,7 +334,7 @@ pub fn estimate_with_progress(
                     continue;
                 }
                 let mut row = Vec::new();
-                for ri in s.range_start..s.range_end {
+                for ri in s.range_start.max(s.minimum_range_index.get(li).copied().unwrap_or(s.range_start))..s.range_end {
                     if m >= ri {
                         let j = m - ri;
                         if j < ambiguities[pi].len() {

@@ -46,6 +46,19 @@ fn injection_recovers_complex_amplitude_and_preserves_noise() {
     assert_eq!(c.cleaned[1500], y[1500]);
 }
 #[test]
+fn lower_echo_is_untouched_and_refinement_cannot_cross_cutoff() {
+    let tx=tx();let d=Detection{delay_samples:500.25,doppler_hz:1000.};
+    let t=template(&tx,d.delay_samples,d.doppler_hz,1e6,tx.len(),16);
+    let y:Vec<_>=noise(tx.len(),17).iter().zip(&t).map(|(n,t)|n+100.*t).collect();
+    let mut settings=Settings{minimum_delay_samples:Some(501.),..Settings::default()};
+    let c=cancel(&y,&tx,&[d.clone()],1e6,[1600,2000],&settings).unwrap();
+    assert_eq!(c.cleaned,y);assert!(!c.diagnostic.applied);assert!(c.usable.iter().all(|v|*v));
+    settings.minimum_delay_samples=Some(500.);
+    let c=cancel(&y,&tx,&[d],1e6,[1600,2000],&settings).unwrap();
+    assert!(!c.diagnostic.detections.is_empty());
+    assert!(c.diagnostic.detections.iter().all(|d|d.delay_samples>=500.));
+}
+#[test]
 fn clipped_echo_is_never_accepted() {
     let tx = tx();
     let d = Detection {

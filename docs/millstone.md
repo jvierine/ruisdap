@@ -693,3 +693,31 @@ uncertainty model. Held-RF pilot checks also retain some detectable residuals.
 The forecaster remains outside production preparation; the scientific
 publication hold stays in place pending full-integration real-event,
 false-candidate and coverage tests in a fresh immutable product version.
+
+### Requested conservative same-pulse removal
+
+Neighbouring-pulse echo prediction has been rejected for campaign processing.
+The processing path fits and subtracts echoes from the pulse being processed.
+The diagnostic experiments above do not define the production method.
+
+New archive runs require the recorded CFAR ratio to reach twice the recorded
+CFAR threshold, a 3.01 dB increase in power threshold. They only admit targets
+at **400 km altitude or above**. The manifest explicitly records
+`debris_cfar_threshold_multiplier` (default 2) and
+`debris_min_altitude_km` (default 400). Original candidate statistics and
+selection decisions are retained in product metadata.
+
+This reader supports monostatic vertical ZENITH. For that geometry, altitude
+is slant range plus the campaign station height of 0.146 km. The cutoff
+therefore corresponds to 399.854 km slant range. It is applied after the
+measured transmitter/receiver timing correction. Delay refinement is
+constrained by the same boundary; targets below it are neither subtracted
+nor masked as debris. This is a target-altitude selection, not an ion-fit
+range restriction. It does not claim that a finite waveform has no response
+at neighbouring plasma gates.
+
+Each output directory has a cancellation-policy ledger. Changed policies or
+legacy checkpoints require a fresh product version rather than silently
+reusing products generated with different thresholds. The direct DigitalRF
+reader, pulse selection, calibration, lag inversion and fitting settings
+remain unchanged. No neighbouring-pulse option is accepted by the manifest.

@@ -13,6 +13,8 @@ pub struct Detection {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub minimum_delay_samples: Option<f64>,
     pub interpolation_half: usize,
     pub validation_block: usize,
     pub max_residual_rms_ratio: f64,
@@ -35,6 +37,7 @@ fn zero_lag(value: &f64) -> bool {
 impl Default for Settings {
     fn default() -> Self {
         Self {
+            minimum_delay_samples: None,
             interpolation_half: 16,
             validation_block: 16,
             max_residual_rms_ratio: 1.5,
@@ -218,6 +221,7 @@ pub fn cancel(
             && settings.correlation_lag_s >= 0.,
         "invalid cancellation settings"
     );
+    ensure!(settings.minimum_delay_samples.is_none_or(|v|v.is_finite() && v>=0.),"invalid minimum echo delay");
     ensure!(
         detections.iter().all(|d| d.delay_samples.is_finite()
             && d.doppler_hz.is_finite()
@@ -250,7 +254,7 @@ pub fn cancel(
     let noise = noise2.sqrt();
     let mut refined = Vec::new();
     let mut templates = Vec::new();
-    for d in detections {
+    for d in detections.iter().filter(|d|settings.minimum_delay_samples.is_none_or(|minimum|d.delay_samples>=minimum)) {
         let mut centre = d.clone();
         let mut selected = (d.clone(), Vec::new());
         let levels = if settings.refine_delay_samples == 0. && settings.refine_doppler_hz == 0. {
@@ -288,6 +292,7 @@ pub fn cancel(
                         + di as f64 * settings.refine_delay_samples / (2. * 4f64.powi(level));
                     let ff = centre.doppler_hz
                         + fi as f64 * settings.refine_doppler_hz / (2. * 4f64.powi(level));
+                    if settings.minimum_delay_samples.is_some_and(|minimum|dd<minimum){continue;}
                     let t: Vec<_> = delayed[(di + 2) as usize]
                         .iter()
                         .zip(&phases[(fi + 2) as usize])

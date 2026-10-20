@@ -18,6 +18,7 @@ use std::{
     path::PathBuf,
 };
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Manifest {
     pub roots: Vec<PathBuf>,
     #[serde(default)]
@@ -28,8 +29,22 @@ pub struct Manifest {
     pub live_directory: Option<PathBuf>,
     #[serde(default="default_cancellation")]
     pub cancel_debris: bool,
+    #[serde(default="default_debris_min_altitude")]
+    pub debris_min_altitude_km: f64,
+    #[serde(default="default_cfar_multiplier")]
+    pub debris_cfar_threshold_multiplier: f64,
 }
 fn default_cancellation()->bool{true}
+fn default_debris_min_altitude()->f64{400.}
+fn default_cfar_multiplier()->f64{2.}
+// ZENITH is vertical. Existing campaign geometry uses this station height;
+// height along the local geodetic normal is site height + slant range.
+const ZENITH_SITE_ALTITUDE_KM:f64=0.146;
+fn minimum_debris_delay(altitude_km:f64)->f64{(altitude_km-ZENITH_SITE_ALTITUDE_KM).max(0.)*2e6/299792.458}
+fn selected_debris(delay:f64,ratio:f64,threshold:f64,min_altitude:f64,multiplier:f64)->Result<bool>{
+    ensure!(ratio.is_finite() && ratio>=0. && threshold.is_finite() && threshold>0.,"invalid recorded CFAR statistic");
+    Ok(delay>=minimum_debris_delay(min_altitude) && ratio>=threshold*multiplier)
+}
 struct Stream {
     directories: Vec<PathBuf>,
     cadence: u64,
@@ -301,10 +316,23 @@ pub struct Archive {
     kernel_sha256:String,
     inherited_kernel_sha256:Option<String>,
     cancel_debris:bool,
+    debris_min_altitude_km:f64,
+    debris_cfar_threshold_multiplier:f64,
 }
 impl Archive {
     pub fn open(m: &Manifest) -> Result<Self> {
         ensure!(!m.roots.is_empty(), "no DigitalRF roots");
+        ensure!(m.debris_min_altitude_km.is_finite() && m.debris_min_altitude_km>=0. && m.debris_cfar_threshold_multiplier.is_finite() && m.debris_cfar_threshold_multiplier>=1.,"invalid debris altitude/CFAR selection");
+        let policy=json!({"method":"same-pulse","cancel_debris":m.cancel_debris,"minimum_altitude_km":m.debris_min_altitude_km,"cfar_threshold_multiplier":m.debris_cfar_threshold_multiplier,"station_altitude_km":ZENITH_SITE_ALTITUDE_KM,"geometry":"vertical ZENITH; altitude = station height + slant range"});
+        let policy_path=m.output.join("cancellation-policy.json");
+        if policy_path.exists(){
+            ensure!(serde_json::from_slice::<Value>(&fs::read(&policy_path)?)?==policy,"cancellation policy changed; use a fresh product version");
+        }else{
+            ensure!(!m.output.join("audit").exists(),"legacy checkpoints cannot be reused with the new cancellation policy; use a fresh product version");
+            fs::create_dir_all(&m.output)?;
+            let tmp=policy_path.with_extension(format!("{}.tmp",std::process::id()));
+            fs::write(&tmp,serde_json::to_vec(&policy)?)?;fs::rename(tmp,policy_path)?;
+        }
         let mut rf = Reader::open(&m.roots)?;
         rf.set_cache_options(CacheOptions {
             minimum_bytes: 64 * 1024 * 1024,
@@ -329,7 +357,7 @@ impl Archive {
         let inherited_file=m.output.parent().unwrap_or(&m.output).join("kernel.h5");
         let inherited_kernel_sha256=if inherited_file.is_file(){Some(text_attr(&File::open(inherited_file)?,"binary_sha256")?)}else{None};
         Ok(Self {
-            kernel_sha256,inherited_kernel_sha256,cancel_debris:m.cancel_debris,
+            kernel_sha256,inherited_kernel_sha256,cancel_debris:m.cancel_debris,debris_min_altitude_km:m.debris_min_altitude_km,debris_cfar_threshold_multiplier:m.debris_cfar_threshold_multiplier,
             rf,
             metadata: Metadata::open(&metadata_roots)?,
             roots: m.roots.clone(),
@@ -490,13 +518,17 @@ impl Archive {
                     }
                     let raw = g.dataset("raw_delay_sample")?.read_raw::<f64>()?;
                     let dop = g.dataset("doppler_hz")?.read_raw::<f64>()?;
-                    ensure!(raw.len() == dop.len(), "invalid CFAR detection dimensions");
-                    for (&r, &f) in raw.iter().zip(&dop) {
-                        found.push(Detection {
-                            delay_samples: r - gate[0] as f64 - delay,
+                    let ratios=g.dataset("cfar_ratio")?.read_raw::<f64>()?;
+                    let thresholds=g.dataset("cfar_threshold")?.read_raw::<f64>()?;
+                    ensure!(raw.len() == dop.len() && raw.len()==ratios.len() && raw.len()==thresholds.len(), "invalid CFAR detection dimensions");
+                    for (((&r, &f),&ratio),&threshold) in raw.iter().zip(&dop).zip(&ratios).zip(&thresholds) {
+                        let corrected=r-gate[0] as f64-delay;
+                        let eligible=selected_debris(corrected,ratio,threshold,self.debris_min_altitude_km,self.debris_cfar_threshold_multiplier)?;
+                        if eligible{found.push(Detection {
+                            delay_samples: corrected,
                             doppler_hz: f,
-                        });
-                        cfar.push(json!({"pulse_sample":k,"raw_delay_sample":r,"doppler_hz":f}));
+                        });}
+                        cfar.push(json!({"pulse_sample":k,"raw_delay_sample":r,"doppler_hz":f,"cfar_ratio":ratio,"cfar_threshold":threshold,"altitude_km":ZENITH_SITE_ALTITUDE_KM+corrected*0.149896229,"eligible_for_removal":eligible}));
                     }
                 }
                 echo.push(y);
@@ -512,7 +544,7 @@ impl Archive {
                 .iter()
                 .map(|&l| ((800. - 111. - 480. * 0.2 + l as f64) / 30.).round() as usize)
                 .collect();
-            let config = Configuration {
+            let mut config = Configuration {
                 station: "Millstone Hill".into(),
                 antenna: "ZENITH".into(),
                 channel: "zenith-l".into(),
@@ -557,13 +589,14 @@ impl Archive {
                     outlier_threshold: 10.,
                     background_column: true,
                 },
-                cancellation: Cancellation::default(),
+                cancellation: Cancellation{minimum_delay_samples:Some(minimum_debris_delay(self.debris_min_altitude_km)),..Cancellation::default()},
                 cancel_debris: self.cancel_debris,
                 injection_temperature_k: 1172.,
                 range_doppler_fft: 1024,
                 range_doppler_samples: Vec::new(),
                 instrument_metadata: json!({"transmitter_w":selected_power,"pulse_transmitter_w":ptx,"bit_length_us":if family=="coded"{30.}else{480.},"code_bits":if family=="coded"{16}else{1},"dc_offset":[-0.212,-0.221],"tx_to_receiver_delay_samples":delays,"cfar":cfar,"azimuth_deg":0.,"elevation_deg":90.,"science_pulse_count":science.len(),"partner_pulse_count":keys.len()-science.len(),"digital_rf_roots":self.roots,"source_gaps":gaps,"source_hash_kind":"SHA256 of configuration, exact pulse keys and original numerical receive samples","settings_reference":"historical 10 s decode; 30 us range basis; 45 measured lags; full 7200 us delay grid; actual waveform-specific gates"}),
             };
+            config.instrument_metadata["debris_selection"]=json!({"method":"same-pulse","minimum_altitude_km":self.debris_min_altitude_km,"cfar_threshold_multiplier":self.debris_cfar_threshold_multiplier,"station_altitude_km":ZENITH_SITE_ALTITUDE_KM,"geometry":"vertical ZENITH; altitude = station height + slant range"});
             let mut hash = Sha256::new();
             hash.update(serde_json::to_vec(&config)?);
             for k in &keys {
@@ -712,10 +745,23 @@ pub fn run_window(archive: &mut Archive, m: &Manifest, begin: u64) -> Result<()>
 mod tests {
     use super::*;
     #[test]
+    fn stricter_cfar_and_altitude_cutoff_are_both_required(){
+        let boundary=minimum_debris_delay(400.);
+        assert!(!selected_debris(boundary-0.01,100.,23.,400.,2.).unwrap());
+        assert!(!selected_debris(boundary+1.,45.99,23.,400.,2.).unwrap());
+        assert!(selected_debris(boundary,46.,23.,400.,2.).unwrap());
+        assert!((boundary*0.149896229+ZENITH_SITE_ALTITUDE_KM-400.).abs()<1e-10);
+        assert!(selected_debris(boundary,50.,f64::NAN,400.,2.).is_err());
+    }
+    #[test]
     fn cancellation_controls_are_opt_out_and_keep_source_selection() {
         let base=json!({"roots":["original-rf"],"start_unix_s":100,"end_unix_s":110,"output":"reduced"});
         let production:Manifest=serde_json::from_value(base.clone()).unwrap();
         assert!(production.cancel_debris);
+        assert_eq!(production.debris_min_altitude_km,400.);
+        assert_eq!(production.debris_cfar_threshold_multiplier,2.);
+        let mut rejected=base.clone();rejected["independent_debris"]=json!(true);
+        assert!(serde_json::from_value::<Manifest>(rejected).is_err());
         let mut control=base;
         control["cancel_debris"]=json!(false);
         let control:Manifest=serde_json::from_value(control).unwrap();

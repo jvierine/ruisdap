@@ -9,6 +9,7 @@ import h5py
 from isr_product import validate
 PUBLIC = pathlib.Path('/srv/guisdap')
 ANALYSIS = 'native-direct-live-20261019'
+ANALYSIS_LABEL = 'Rust · live direct DigitalRF'
 FIT_SERIES = 'legacy300-v3'
 CPU_ASSIGNMENTS = {}
 CPU_LOCK = threading.Lock()
@@ -21,7 +22,8 @@ def atomic_json(path, value):
         json.dump(value, f, allow_nan=False); tmp = pathlib.Path(f.name)
     tmp.chmod(0o644); tmp.replace(path)
 
-def register(date, destination, analysis=ANALYSIS, label='Rust · live direct DigitalRF'):
+def register(date, destination, analysis=None, label=None):
+    analysis=analysis or ANALYSIS;label=label or ANALYSIS_LABEL
     path = PUBLIC/'catalog/millstone-config.json'
     with path.with_suffix('.lock').open('a') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
@@ -105,7 +107,7 @@ def _publish(root, date, context, binary_sha, complete=False):
     fits = root/date/('stream-fits-'+FIT_SERIES)
     files = sorted(fits.glob('fit-*.h5'))
     if not files: return
-    destination = PUBLIC/'data'/f'millstone-{date}-zenith-native-direct-live-20261019-v1'
+    destination = PUBLIC/'data'/f'millstone-{date}-zenith-{ANALYSIS}-v1'
     destination.mkdir(exist_ok=True); destination.chmod(0o755)
     signature = hashlib.sha256(('\n'.join(p.name for p in files)+str(complete)+'debris-v2').encode()).hexdigest()
     old = json.loads((destination/'manifest.json').read_text()) if (destination/'manifest.json').exists() else {}
@@ -119,7 +121,7 @@ def _publish(root, date, context, binary_sha, complete=False):
         # Snapshot actual reductions/fit kernel provenance, never substitute a full-day claim.
         manifest = json.loads((staging/'manifest.json').read_text())
         start = int(dt.datetime.fromisoformat(date).replace(tzinfo=dt.timezone.utc).timestamp())
-        manifest.update(analysis_id=ANALYSIS,analysis_label='Rust · live direct DigitalRF',live_revision=signature,
+        manifest.update(analysis_id=ANALYSIS,analysis_label=ANALYSIS_LABEL,live_revision=signature,
             analysis_live=not complete,analysis_complete=complete,analysis_default_window=[start,start+86400],
             kernel_sha256=binary_sha,input_mode='direct multi-directory DigitalRF',
             analysis_note='Live native fits of completed integration windows. Unprocessed windows are unavailable. Fits use finite-response amplitude-profiled starting densities to avoid the hot-ion local minimum. Integrations follow the legacy first-available-ACF 300 s maximum rule; antenna switching can shorten their exposure. Recorded transmit power and pulse response are normalized; initial calibration transfers the reviewed April 8 reference. Physical velocity sign remains unverified.')
@@ -136,14 +138,16 @@ def _publish(root, date, context, binary_sha, complete=False):
     print(date,'LIVE',len(files),'complete fitted integrations',signature[:12],flush=True)
 
 def publish(root, date, context, binary_sha, complete=False):
-    destination=PUBLIC/'data'/f'millstone-{date}-zenith-native-direct-live-20261019-v1'
+    destination=PUBLIC/'data'/f'millstone-{date}-zenith-{ANALYSIS}-v1'
     destination.mkdir(exist_ok=True)
     with (destination/'.publish.lock').open('a') as lease:
         fcntl.flock(lease,fcntl.LOCK_EX)
         return _publish(root,date,context,binary_sha,complete)
 
 def main():
-    p=argparse.ArgumentParser();p.add_argument('--root',type=pathlib.Path,required=True);p.add_argument('--workers',type=int,default=8);p.add_argument('--once',action='store_true');p.add_argument('--drain',action='store_true');p.add_argument('--date');a=p.parse_args()
+    global ANALYSIS,ANALYSIS_LABEL
+    p=argparse.ArgumentParser();p.add_argument('--root',type=pathlib.Path,required=True);p.add_argument('--workers',type=int,default=8);p.add_argument('--once',action='store_true');p.add_argument('--drain',action='store_true');p.add_argument('--date');p.add_argument('--analysis-id',default=ANALYSIS);p.add_argument('--analysis-label',default=ANALYSIS_LABEL);a=p.parse_args()
+    ANALYSIS=a.analysis_id;ANALYSIS_LABEL=a.analysis_label
     dates=[a.date] if a.date else ['2024-04-08','2024-04-07','2024-04-09']
     assert 1<=a.workers<=128
     with h5py.File(a.root/'kernel.h5') as h:

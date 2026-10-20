@@ -75,7 +75,9 @@ def audit_day(day,start,kernels):
 
 def main():
     p=argparse.ArgumentParser();p.add_argument('--root',type=pathlib.Path,action='append',required=True)
-    p.add_argument('--output',type=pathlib.Path,required=True);p.add_argument('--resume',action='store_true');a=p.parse_args()
+    p.add_argument('--output',type=pathlib.Path,required=True);p.add_argument('--resume',action='store_true')
+    p.add_argument('--analysis-id',default='native-direct-20261019');p.add_argument('--analysis-label',default='Rust · direct DigitalRF · 45 lags');p.add_argument('--live-analysis-id');a=p.parse_args()
+    live_id=a.live_analysis_id or ('native-direct-live-20261019' if a.analysis_id=='native-direct-20261019' else a.analysis_id+'-live')
     assert a.resume or not a.output.exists(),'Use a fresh version or explicitly resume'
     a.output.mkdir(parents=True,exist_ok=a.resume);(a.output/'live').mkdir(exist_ok=True)
     binary=a.output/'guisdap-millstone';kernel=a.output/'kernel.h5'
@@ -96,6 +98,7 @@ def main():
         assert digest(reducer)==expected,'Frozen reduction kernel changed'
     spec=importlib.util.spec_from_file_location('stream','scripts/stream-millstone-direct.py')
     stream=importlib.util.module_from_spec(spec);spec.loader.exec_module(stream)
+    stream.ANALYSIS=live_id;stream.ANALYSIS_LABEL=a.analysis_label+' · live'
     env={**os.environ,'OMP_NUM_THREADS':'1','OPENBLAS_NUM_THREADS':'1'};env.pop('DISPLAY',None)
     mpi=['/usr/bin/mpirun','-np','128','--map-by','core','--bind-to','core']
     def status(phase,completed=0,total=1):
@@ -106,14 +109,14 @@ def main():
     pending_review=[]
     for date in DATES:
         day=a.output/date;day.mkdir(exist_ok=True);(day/'live').mkdir(exist_ok=True)
-        destination=PUBLIC/'data'/f'millstone-{date}-zenith-native-direct-20261019-v1'
+        destination=PUBLIC/'data'/f'millstone-{date}-zenith-{a.analysis_id}-v1'
         if (destination/'manifest.json').exists():
             manifest=json.loads((destination/'manifest.json').read_text())
             assert manifest['kernel_sha256']==fit_sha and manifest['analysis_complete']
-            stream.register(date,destination,'native-direct-20261019','Rust · direct DigitalRF · 45 lags')
+            stream.register(date,destination,a.analysis_id,a.analysis_label)
             continue
         start=int(dt.datetime.fromisoformat(date).replace(tzinfo=dt.timezone.utc).timestamp())
-        plan=day/'archive.json';m=dict(roots=list(map(str,a.root)),start_unix_s=start,end_unix_s=start+86400,output=str(day),live_directory=str(day/'live'))
+        plan=day/'archive.json';m=dict(roots=list(map(str,a.root)),start_unix_s=start,end_unix_s=start+86400,output=str(day),live_directory=str(day/'live'),debris_min_altitude_km=400.,debris_cfar_threshold_multiplier=2.)
         if plan.exists():assert json.loads(plan.read_text())==m,'Archive plan changed'
         else:atomic_json(plan,m)
         lock=pathlib.Path('/home/j/data/guisdap/2022-11-02/calibration/native-compute.lock');lock.parent.mkdir(parents=True,exist_ok=True)
@@ -138,7 +141,7 @@ def main():
                 assert reference.attrs.get('calibration_rejected_science_pulse_count',0)==excluded
                 assert reference.attrs.get('readable_science_pulse_count',len(science))==len(science)+excluded
             status(date+' fitting completed legacy 300 s integration windows on 128 cores')
-            run([sys.executable,'scripts/stream-millstone-direct.py','--root',str(a.output),'--date',date,'--workers','128','--drain'],day/'fit.log')
+            run([sys.executable,'scripts/stream-millstone-direct.py','--root',str(a.output),'--date',date,'--workers','128','--drain','--analysis-id',live_id,'--analysis-label',a.analysis_label+' · live'],day/'fit.log')
             fits=day/('stream-fits-'+stream.FIT_SERIES);fit_files=sorted(fits.glob('fit-*.h5'));used=[]
             assert fit_files,'No complete native fits'
             for path in fit_files:
@@ -163,8 +166,8 @@ def main():
             run([sys.executable,'scripts/export-millstone-native-view.py','--historical',str(context),'--fits',str(fits),'--output',str(staging)],day/'export.log')
             manifest=json.loads((staging/'manifest.json').read_text())
             with h5py.File(day/'coverage.h5') as coverage: rejected_count=len(coverage['fully_rejected_science_pulse_sample'])
-            manifest.update(analysis_id='native-direct-20261019',analysis_live=False,analysis_complete=True,
-                analysis_label='Rust · direct DigitalRF · 45 lags',analysis_default_window=[start,start+86400],
+            manifest.update(analysis_id=a.analysis_id,analysis_live=False,analysis_complete=True,
+                analysis_label=a.analysis_label,analysis_default_window=[start,start+86400],
                 science_pulse_count=len(science),fully_rejected_science_pulse_count=rejected_count,candidate_science_pulse_count=len(candidate),excluded_candidate_count=len(candidate)-len(science),
                 receiver_calibration_rejected_science_pulse_count=excluded,readable_science_pulse_count=len(science)+excluded,
                 kernel_sha256=fit_sha,reduction_kernel_sha256=sorted(set(r['kernel_sha256'] for r in rows)),
@@ -174,7 +177,7 @@ def main():
             shutil.copy2(day/'coverage.h5',staging/'coverage.h5');(staging/'coverage.h5').chmod(0o644)
             shutil.copy2(reference_report,staging/'source-coverage-reference.h5');(staging/'source-coverage-reference.h5').chmod(0o644)
             staging.rename(destination)
-            stream.register(date,destination,'native-direct-20261019','Rust · direct DigitalRF · 45 lags')
+            stream.register(date,destination,a.analysis_id,a.analysis_label)
             stream.publish(a.output,date,context,fit_sha,complete=True)
             print(date,'PUBLISHED',len(fit_files),'fits',len(science),'science pulses',flush=True)
     if pending_review:

@@ -610,3 +610,86 @@ from original RF, including checks that valid calibration pulses were not
 silently omitted. Day products separately record readable, reduced and
 calibration-rejected pulse counts. A quality exclusion therefore remains
 visible without masquerading as a missing source recording or valid density.
+
+April 9's independent audit caught a second exclusion-accounting case at
+10:30:50 UTC. Missing RF left 74 paired coded science pulses and 37 long
+science pulses, but only eight coded and five long pulses had non-flat
+receiver-background gates. A complete family requires sixteen usable
+calibration pulses. The reducer already skipped those families; its audit
+now explicitly records all 111 excluded science keys, the retained
+calibration keys, configuration and pulse diagnostics. The upstream reader
+independently replays every claimed flat background and verifies that no
+valid calibration pulse was omitted. The existing reduced products and
+fits are unchanged. These exclusions are separate from the day's 374
+nonpositive-gain exclusions.
+
+### Independent-pulse subtraction development
+
+The experimental Rust track forecaster removes the queried pulse before
+association, geometry regression and complex phase/amplitude estimation.
+It associates nearby CFAR-derived events from other pulses, fits quadratic
+delay and within-pulse Doppler, and predicts a linear complex envelope with
+a frequency/chirp phase model. The phase search uses sparse FFT sums of
+amplitude metadata; absent pulse epochs carry zero weight, with no invented
+RF samples. A local Nelder–Mead refinement follows the FFT grid search.
+The phase frequency is aliased on the measured pulse clock; it is not
+substituted for the independently fitted within-pulse Doppler.
+
+At least sixteen other pulses are required. Tests use neighbourhoods of
+0.35 seconds for coded pulses and 0.5 seconds for long pulses, at most
+48 training events, and training explained fraction at least 0.9. Unsupported
+timing, insufficient support and multiple associated components in a
+training pulse produce explicit unsupported results. Held-pulse metadata
+mutation tests leave the forecast unchanged. On 64 fixed real-data queries,
+Rust and an independent Python implementation agree on support/training
+membership and forecast tolerances; the largest relative amplitude
+difference is 5.8e-8. This numerical agreement is not scientific validation.
+
+A non-oracle detector control passes synthetic voltages through the unchanged
+CFAR detector and native single-pulse amplitude estimator, then gives only
+the resulting event metadata to the native forecaster. Four independent
+groups of 32 pulses per case cover coded/long pulses, thin/broad diffuse
+layers, and absent/present moving targets. All 512 injected-target pulses
+receive forecasts; none of the 512 target-free pulses receive a subtraction.
+The limited null sample does not establish a campaign false-alarm rate.
+These controls save paired lag moments, not raw RF or full LPI products.
+
+Two further controls inject a declared moving target at slant ranges 300
+and 550 km into the same quiet original-RF window, 2024-04-08 18:00:10 UTC.
+All 750 coded and 375 long pulses receive independent forecasts. These
+candidate-controlled tests use coarse seeds; they are not CFAR detection
+efficiency tests. They run all 45 native lags through the actual LPI,
+including the clutter-pair branch, recorded noise-injection calibration,
+physical pulse-energy/range normalization and propagated diagonal variance.
+Original ACFs, clutter ACFs and variances match the canonical campaign
+products exactly. Calibration gains are identical across all four branches.
+No raw or cleaned voltages are written.
+
+For example, over the 30 km neighbourhood of the 300 km injection, the
+coded real-ACF change at the measured 20 microsecond lag is -15.44% with
+same-pulse subtraction and +0.66% with independent prediction, relative to
+the mean absolute original real ACF in that neighbourhood. At 10
+microseconds those figures are -7.66% and -0.13%. Keeping lag coordinates
+explicit matters: the first native lag is 10 microseconds, not zero.
+
+The frozen campaign fitter was then run on the original, uncorrected
+injection, same-pulse subtraction and independent-prediction ACF branches.
+These are ten-second controls with the same legacy range averaging and
+calibration, not full campaign integrations. Median fitted changes from
+the identical original RF within 30 km of each injected range were:
+
+| Injected slant range | Method | Density change | Ti change / K | Te change / K | vi change / m/s |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 300 km | Same-pulse | +6.94% | -255.6 | +166.1 | +16.31 |
+| 300 km | Independent | -0.82% | +52.5 | +10.0 | -0.88 |
+| 550 km | Same-pulse | -1.81% | -17.1 | -74.6 | +15.58 |
+| 550 km | Independent | -2.57% | +24.3 | +35.1 | -4.44 |
+
+These results show improvement in several parameters, with remaining errors
+and no uniform improvement in every quantity. They use one quiet measured
+window, not independent campaign-wide trials. Prediction variance is
+conditional on the fitted phase/geometry and does not supply a complete
+uncertainty model. Held-RF pilot checks also retain some detectable residuals.
+The forecaster remains outside production preparation; the scientific
+publication hold stays in place pending full-integration real-event,
+false-candidate and coverage tests in a fresh immutable product version.

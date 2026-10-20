@@ -636,7 +636,10 @@ pub fn run_window(archive: &mut Archive, m: &Manifest, begin: u64) -> Result<()>
         } else {
             let (pulses, diagnostics) = product::prepare(&p)?;
             if pulses.iter().filter(|p|p.usable.iter().any(|&x|x)).count()<16 {
-                gaps.push(json!({"pulse_samples":p.samples,"mode":p.config.mode,"reason":"fewer than sixteen pulses with uncontaminated receiver calibration"}));
+                let selected:Vec<_>=p.samples.iter().zip(&p.config.lpi.science_pulse).filter(|(_,selected)|**selected).map(|(&k,_)|k).collect();
+                calibration_rejected_science.extend_from_slice(&selected);
+                let calibration:Vec<_>=p.samples.iter().zip(&pulses).filter(|(_,pulse)|pulse.usable.iter().any(|&x|x)).map(|(&k,_)|k).collect();
+                gaps.push(json!({"reason":"insufficient_receiver_calibration","mode":p.config.mode,"source_sha256":p.hash,"science_pulse_samples":selected,"pulse_samples":p.samples,"calibration_pulse_samples":calibration,"configuration":p.config,"cancellation_diagnostics":diagnostics}));
                 continue;
             }
             let fit = match lpi::estimate(&pulses, &p.config.lpi, p.config.injection_temperature_k) {

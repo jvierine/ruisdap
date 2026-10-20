@@ -85,7 +85,7 @@ def main():
                         group = out.create_group(f'range_{lo}_{hi}')
                         for number, index in enumerate(np.unique(eligible[np.linspace(0, len(eligible)-1, min(a.anchors, len(eligible))).astype(int)])):
                             dt = times-times[index]
-                            shift = 2*frequencies[index]/440.2e6*1e6*dt
+                            shift = frequencies[index]/440.2e6*1e6*dt
                             distance = np.minimum(abs(delays-delays[index]-shift), abs(delays-delays[index]+shift))
                             use = np.flatnonzero((abs(dt) <= .25) & (distance <= 16) & (abs(frequencies-frequencies[index]) <= 2000))
                             # Use at most one component per pulse; prefer the

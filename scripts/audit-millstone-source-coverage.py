@@ -65,8 +65,9 @@ def paired_science(keys, codes, begin, end):
 
 
 def verify_calibration_exclusion(gap, rf):
-    """Independently replay the failed calibration from original RF in memory."""
-    assert gap['reason'] == 'invalid_receiver_gain'
+    """Replay invalid gain or insufficient valid calibration from original RF."""
+    insufficient = gap['reason'] == 'insufficient_receiver_calibration'
+    assert insufficient or gap['reason'] == 'invalid_receiver_gain'
     c = gap['configuration']
     assert c['mode'] == gap['mode'] and c['mode'] in ['alternating-code-16', 'long-pulse-480us']
     s = c['lpi']
@@ -80,8 +81,11 @@ def verify_calibration_exclusion(gap, rf):
     expected = np.array([k for k, science in zip(keys, s['science_pulse']) if science], np.uint64)
     np.testing.assert_array_equal(expected, gap['science_pulse_samples'])
     calibration = set(map(int, gap['calibration_pulse_samples']))
-    assert len(calibration) >= 16 and calibration <= set(keys)
-    assert gap['injection_temperature_k'] == c['injection_temperature_k'] > 0
+    assert calibration <= set(keys)
+    assert (len(calibration) < 16) if insufficient else (len(calibration) >= 16)
+    assert c['injection_temperature_k'] > 0
+    if not insufficient:
+        assert gap['injection_temperature_k'] == c['injection_temperature_k']
     path = pathlib.Path(__file__).with_name('check-millstone-residual-cfar.py')
     spec = importlib.util.spec_from_file_location('calibration_reconstruction', path)
     reconstruction = importlib.util.module_from_spec(spec)
@@ -119,6 +123,8 @@ def verify_calibration_exclusion(gap, rf):
         clean, _ = reconstruction.reconstruct(raw, c, diagnostic)
         filtered.append(np.convolve(clean, fir, mode='full')[half:half+len(clean)])
     assert expected_calibration == calibration
+    if insufficient:
+        return expected
     quiet = np.asarray([z[s['noise_gate'][0]:s['noise_gate'][1]] for z in filtered])
     injected = np.asarray([z[s['injection_gate'][0]:s['injection_gate'][1]] for z in filtered])
     means = quiet.mean(axis=1)
@@ -234,7 +240,7 @@ def main():
                     gaps = json.loads(bytes(audit['gaps_json'][:])) if 'gaps_json' in audit else []
                 independently_rejected = []
                 for gap in gaps:
-                    if gap.get('reason') == 'invalid_receiver_gain':
+                    if gap.get('reason') in ['invalid_receiver_gain', 'insufficient_receiver_calibration']:
                         independently_rejected.extend(verify_calibration_exclusion(gap, rf))
                 np.testing.assert_array_equal(rejected, np.sort(np.asarray(independently_rejected, np.uint64)), err_msg='Unverified calibration exclusion')
                 assert not len(np.intersect1d(observed_science, rejected)), 'Calibrated and rejected pulse sets overlap'

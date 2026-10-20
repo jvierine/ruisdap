@@ -17,6 +17,27 @@ spec.loader.exec_module(module)
 
 
 class IndependentCoverage(unittest.TestCase):
+    def test_insufficient_calibration_exclusion_replays_every_pulse(self):
+        keys=list(range(18));valid={2,7}
+        gap=dict(reason='insufficient_receiver_calibration',mode='alternating-code-16',pulse_samples=keys,
+                 science_pulse_samples=keys[:-1],calibration_pulse_samples=sorted(valid),
+                 configuration=dict(mode='alternating-code-16',cancel_debris=True,injection_temperature_k=1200,
+                     instrument_metadata={'dc_offset':[0.,0.]},cancellation={'interpolation_half':16},
+                     lpi=dict(sample_rate_hz=1e6,filter_half=100,passband_hz=18000,
+                              science_pulse=[True]*17+[False],noise_gate=[7700,8200],
+                              injection_gate=[8400,8850],tx_gate=[76,624])),
+                 cancellation_diagnostics=[dict(reason='no_detections' if k in valid else 'invalid_background_noise',
+                                                detections=[],amplitudes=[]) for k in keys])
+        class OriginalRF:
+            def read_vector(self,key,length,channel):
+                return np.exp(2j*np.pi*10000*np.arange(length)/1e6) if key in valid else np.zeros(length,complex)
+        np.testing.assert_array_equal(module.verify_calibration_exclusion(gap,OriginalRF()),keys[:-1])
+        changed=copy.deepcopy(gap);changed['calibration_pulse_samples']=[2]
+        with self.assertRaisesRegex(AssertionError,'silently omitted'):
+            module.verify_calibration_exclusion(changed,OriginalRF())
+        changed=copy.deepcopy(gap);changed['calibration_pulse_samples']=[2,7,8]
+        with self.assertRaises(AssertionError):module.verify_calibration_exclusion(changed,OriginalRF())
+
     def test_bad_gain_exclusion_requires_original_negative_calibration(self):
         n=10000;omega=2*np.pi*10000/1e6;half=100
         j=np.arange(2*half);m=j-half+1e-6

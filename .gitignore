@@ -11,3 +11,6 @@
 *.bz2
 *.pdf
 *.tar
+
+__pycache__/
+*.pyc

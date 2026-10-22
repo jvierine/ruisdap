@@ -1,0 +1,23 @@
+[package]
+name = "guisdap-millstone"
+version.workspace = true
+edition.workspace = true
+[features]
+default = []
+mpi = ["dep:mpi"]
+[dependencies]
+guisdap-ion = { path = "../guisdap-ion" }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+num-complex = { version = "0.4", features = ["serde"] }
+nalgebra = "0.33"
+rustfft = "6"
+hdf5 = { package = "hdf5-metno", version = "0.12" }
+clap = { version = "4", features = ["derive"] }
+mpi = { version = "0.8", optional = true }
+sha2 = "0.10"
+guisdap-digital-rf = { path = "../guisdap-digital-rf" }
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+[dev-dependencies]
+tempfile = "3"

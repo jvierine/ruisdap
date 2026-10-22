@@ -1,4 +1,5 @@
 {
+  "calibration_root": "/home/j/data/guisdap/2022-11-02/calibration",
   "roots": [
     {
       "label": "Revontuli BEATA study",
@@ -95,7 +96,7 @@
             ]
           ],
           "completion": "/srv/guisdap/data/2022-11-02-plasma-full-60s-v1/index.json",
-          "link": "./?resolution=1"
+          "link": "plasma.html?resolution=1"
         },
         {
           "label": "Plasma-line 15 s",
@@ -120,7 +121,7 @@
             ]
           ],
           "completion": "/srv/guisdap/data/2022-11-02-plasma-full-15s-v1/index.json",
-          "link": "./?resolution=0"
+          "link": "plasma.html?resolution=0"
         }
       ]
     }

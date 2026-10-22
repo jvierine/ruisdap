@@ -1,5 +1,8 @@
 # Compute and static hosting
 
+Develop and test the GUI directly on avaruus so changes are visible at the
+real site. Do not use a local GUI preview as the development target.
+
 Authoritative development checkout: `avaruus.uit.no:/home/j/src/guisdap26`.
 Compute products: `/home/j/data/guisdap/2022-11-02-v4/frames/*.h5`.
 Static export: `/home/j/src/guisdap26/web/data/2022-11-02-v4/`.
@@ -14,8 +17,9 @@ inspection date. Do not substitute another experiment version silently.
 ## Avaruus
 
 Apache serves `http://avaruus.uit.no/guisdap/` directly from `/srv/guisdap/`.
-It is enabled at boot. Only GUI assets and exported products are deployed there;
-there is no compute endpoint. `scripts/apache-guisdap.conf` defines the alias,
+It is enabled at boot. GUI assets and exported products are deployed there;
+the catalogue and calibration APIs are proxied to local user services.
+`scripts/apache-guisdap.conf` defines the alias,
 disables directory listing, and sets the WebAssembly MIME type. The legacy
 user service on port 8088 remains useful for development previews.
 
@@ -34,15 +38,24 @@ scripts/build-web.sh
 scripts/deploy-web.sh
 ```
 
-Development preview over SSH:
-`ssh -N -L 18088:127.0.0.1:8088 avaruus.uit.no`, then open
-`http://127.0.0.1:18088/guisdap/`. Production Apache does not depend on the tunnel
-or on the Rust preview server. TLS is not configured by this initial setup.
+The data browser is the root page. Experiments open `dataset.html`, with paired
+ion-line and plasma-line views. Millstone exports are registered by antenna and
+date in `millstone-config.json`; see [Millstone processing](millstone.md).
+
+The processing monitor shares the catalogue API, at `/guisdap/api/catalog/live`.
+It needs no additional Apache route. Configure `RUISDAP_LIVE_ROOTS` on the
+catalogue service to include writable status directories on each shared compute
+resource. The monitor's 12-second lease is readable by the worker; detailed arrays
+are generated only during a valid lease. Progress checkpoints remain independent.
+
+Deployment preserves `data/`, `catalog/` and existing deployment configuration.
+Do not overwrite those directories with a development export.
 
 ## Thin host, e.g. juha.no
 
-Copy only `index.html`, `style.css`, `config.json` and generated `pkg/` into the
-GUI document directory, e.g. `/var/www/guisdap/`.
+Copy the `web/` assets, including `light.css`, `scientific-plots.js`,
+`plot-data.js`, `embedded.js`, `vendor/` and generated `pkg/`, into the GUI
+document directory, e.g. `/var/www/guisdap/`. Preserve its deployment selectors.
 Export processed data into `/mnt/shovel/guisdap/YYYY-MM-DD/` and serve that root
 through a read-only static alias. Set `config.json` to:
 

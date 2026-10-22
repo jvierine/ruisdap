@@ -21,6 +21,8 @@ pub struct FitSettings {
     pub fit_collision_rate: bool,
     pub fixed_collision_s: f64,
     pub max_iterations: usize,
+    #[serde(default)]
+    pub millstone_historical_bounds: bool,
 }
 impl Default for FitSettings {
     fn default() -> Self {
@@ -29,6 +31,7 @@ impl Default for FitSettings {
             fit_collision_rate: false,
             fixed_collision_s: 0.,
             max_iterations: 80,
+            millstone_historical_bounds: false,
         }
     }
 }
@@ -247,15 +250,22 @@ impl FitProblem {
                 _ => unreachable!(),
             }),
         );
-        let bounds = [
+        let mut bounds = [
             ((1e7f64 / 1e11).ln(), (1e14f64 / 1e11).ln()),
             ((80f64 / 1000.).ln(), (10000f64 / 1000.).ln()),
             ((80f64 / 1000.).ln(), (20000f64 / 1000.).ln()),
             (-3., 3.),
             ((0.1f64 / 1000.).ln(), (1e6f64 / 1000.).ln()),
         ];
+        if self.settings.millstone_historical_bounds {
+            bounds[1]=((150_f64/1000.).ln(),(3000_f64/1000.).ln());
+            bounds[2]=((148.5_f64/1000.).ln(),(9000_f64/1000.).ln());bounds[3]=(-1.5,1.5);
+        }
         for (j, &i) in ind.iter().enumerate() {
             x[j] = x[j].clamp(bounds[i].0, bounds[i].1);
+        }
+        if self.settings.millstone_historical_bounds&&!self.settings.tie_electron_ion_temperature {
+            let ti=ind.iter().position(|i|*i==1).unwrap();let te=ind.iter().position(|i|*i==2).unwrap();x[te]=x[te].clamp(x[ti]+0.99_f64.ln(),x[ti]+3_f64.ln());
         }
         let mut r = self.residual(&x, &ind, whitening)?;
         let mut cost = r.norm_squared();
@@ -287,6 +297,9 @@ impl FitProblem {
             let mut candidate = &x + &step;
             for (k, &i) in ind.iter().enumerate() {
                 candidate[k] = candidate[k].clamp(bounds[i].0, bounds[i].1);
+            }
+            if self.settings.millstone_historical_bounds&&!self.settings.tie_electron_ion_temperature {
+                let ti=ind.iter().position(|i|*i==1).unwrap();let te=ind.iter().position(|i|*i==2).unwrap();candidate[te]=candidate[te].clamp(candidate[ti]+0.99_f64.ln(),candidate[ti]+3_f64.ln());
             }
             let next = match self.residual(&candidate, &ind, whitening) {
                 Ok(r) if r.iter().all(|x| x.is_finite()) => r,
@@ -345,6 +358,7 @@ impl FitProblem {
             .iter()
             .enumerate()
             .any(|(k, &i)| (x[k] - bounds[i].0).abs() < 1e-4 || (x[k] - bounds[i].1).abs() < 1e-4);
+        let at_boundary=at_boundary||(self.settings.millstone_historical_bounds&&((plasma.electron_temperature_k/plasma.ion_temperature_k-0.99).abs()<1e-4||(plasma.electron_temperature_k/plasma.ion_temperature_k-3.).abs()<1e-4));
         let status = if at_boundary {
             "parameter_boundary"
         } else if covariance.is_empty() {

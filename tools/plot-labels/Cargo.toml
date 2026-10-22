@@ -1,0 +1,8 @@
+[package]
+name = "ruisdap-plot-labels"
+version = "0.1.0"
+edition = "2024"
+[workspace]
+[dependencies]
+anyhow = "1"
+rustplotlib = { git = "https://github.com/jvierine/rustplotlib", rev = "0cbb3e1a96b98d22476c858ad4bb2f638ae1a31d", default-features = false }

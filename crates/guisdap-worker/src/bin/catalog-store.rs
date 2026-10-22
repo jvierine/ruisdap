@@ -1,4 +1,8 @@
 //! Archive metadata catalogue and bounded, persistent processing queue.
+#[path = "../live_monitor.rs"]
+mod live_monitor;
+#[path = "../millstone_api.rs"]
+mod millstone_api;
 use anyhow::{ensure, Context, Result};
 use axum::{
     extract::{DefaultBodyLimit, Path as ApiPath, State},
@@ -27,6 +31,8 @@ struct Config {
     worker_threads: usize,
     max_depth: usize,
     recipes: Vec<Recipe>,
+    #[serde(default)]
+    calibration_root: Option<PathBuf>,
 }
 #[derive(Clone, Deserialize, Serialize)]
 struct Root {
@@ -146,7 +152,59 @@ struct Calibration {
     total: usize,
     sha256: String,
 }
+// Plasma products use the same experiment namespace as the ion products.
+// Build their configuration from this recipe, never from another experiment's default.
+fn publish_plasma_config(c: &Config, r: &Recipe) -> Result<()> {
+    let mut datasets = BTreeMap::new();
+    for step in &r.steps {
+        let Some((page, query)) = step.link.split_once('?') else {
+            continue;
+        };
+        if page != "plasma.html" && page != "./" {
+            continue;
+        }
+        let resolution = query
+            .split('&')
+            .find_map(|p| p.strip_prefix("resolution="))
+            .unwrap_or("0")
+            .parse::<usize>()?;
+        let directory = step
+            .completion
+            .parent()
+            .and_then(Path::file_name)
+            .context("plasma export directory missing")?
+            .to_string_lossy();
+        datasets.insert(
+            resolution,
+            serde_json::json!({
+                "label": step.label,
+                "data_root": format!("/guisdap/data/{directory}/")
+            }),
+        );
+    }
+    if datasets.is_empty()
+        || !r.steps.iter().any(|s| {
+            (s.link.starts_with("plasma.html?") || s.link.starts_with("./?")) && complete(s)
+        })
+    {
+        return Ok(());
+    }
+    ensure!(
+        datasets.keys().copied().eq(0..datasets.len()),
+        "non-contiguous plasma resolutions"
+    );
+    let datasets: Vec<_> = datasets.into_values().collect();
+    let public = c.public.join(id(&r.date, &r.experiment));
+    fs::create_dir_all(&public)?;
+    write_json(
+        &public.join("config.json"),
+        &serde_json::json!({
+            "data_root": datasets[0]["data_root"], "datasets": datasets
+        }),
+    )
+}
 fn steps(c: &Config, r: &Recipe) -> Result<(Vec<Step>, Option<Calibration>)> {
+    publish_plasma_config(c, r)?;
     let Some(binding) = &r.calibration_binding else {
         return Ok((r.steps.clone(), None));
     };
@@ -237,7 +295,12 @@ fn steps(c: &Config, r: &Recipe) -> Result<(Vec<Step>, Option<Calibration>)> {
             cfg["instruments_url"] = format!("/guisdap/{url}").into();
         }
     }
-    write_json(&public.join("ion-config.json"), &cfg)?;
+    if result
+        .iter()
+        .any(|s| s.label.starts_with("Ion-line") && s.completion.is_file())
+    {
+        write_json(&public.join("ion-config.json"), &cfg)?;
+    }
     Ok((result, Some(cal)))
 }
 fn complete(step: &Step) -> bool {
@@ -295,7 +358,11 @@ fn add_products(c: &Config, entries: &mut BTreeMap<String, Entry>) {
                     .filter(|s| s.completion.exists())
                     .map(|s| Product {
                         label: s.label.clone(),
-                        link: s.link.clone(),
+                        link: if s.link.starts_with("./?") {
+                            s.link.replacen("./?", "plasma.html?", 1)
+                        } else {
+                            s.link.clone()
+                        },
                         complete: complete(s),
                     })
                     .collect();
@@ -434,10 +501,16 @@ fn authorized(h: &HeaderMap, app: &App) -> bool {
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v == format!("Bearer {}", app.token))
 }
+#[derive(Deserialize)]
+struct RecalibrationRequest {
+    notebook_key: String,
+    revision: u64,
+}
 async fn enqueue(
     State(app): State<App>,
     ApiPath(key): ApiPath<String>,
     headers: HeaderMap,
+    request: Option<Json<RecalibrationRequest>>,
 ) -> Result<Json<Job>, (StatusCode, String)> {
     if !authorized(&headers, &app) {
         return Err((
@@ -452,10 +525,68 @@ async fn enqueue(
         .iter()
         .find(|e| e.id == key)
         .ok_or((StatusCode::NOT_FOUND, "Experiment not in inventory".into()))?;
-    let recipe = recipe(&app.config, e).ok_or((
+    let mut recipe = recipe(&app.config, e).cloned().ok_or((
         StatusCode::UNPROCESSABLE_ENTITY,
         "No validated processing recipe for this experiment/date.".into(),
     ))?;
+    if let Some(Json(request)) = request {
+        let prepare = (|| -> Result<PathBuf> {
+            ensure!(
+                request.notebook_key.len() == 64
+                    && request.notebook_key.bytes().all(|b| b.is_ascii_hexdigit()),
+                "Invalid calibration notebook key"
+            );
+            let root = app
+                .config
+                .calibration_root
+                .clone()
+                .unwrap_or_else(|| app.config.state.parent().unwrap().join("calibrations"));
+            let bytes = fs::read(root.join(&request.notebook_key).join("latest.json"))?;
+            let notebook: serde_json::Value = serde_json::from_slice(&bytes)?;
+            ensure!(
+                notebook["revision"].as_u64() == Some(request.revision),
+                "Calibration changed; refresh and review the latest revision"
+            );
+            let points = notebook["points"]
+                .as_array()
+                .context("Missing calibration points")?;
+            ensure!(
+                points.iter().any(|p| p["included"] == true),
+                "No included calibration points"
+            );
+            for p in points.iter().filter(|p| p["included"] == true) {
+                let time = p["ion_start_unix"]
+                    .as_f64()
+                    .context("Missing calibration time")?;
+                ensure!(
+                    chrono::DateTime::from_timestamp(time as i64, 0)
+                        .context("Invalid calibration time")?
+                        .format("%Y-%m-%d")
+                        .to_string()
+                        == e.date,
+                    "Calibration point belongs to another UTC date"
+                );
+            }
+            let sha = format!("{:x}", Sha256::digest(&bytes));
+            let directory = app.config.state.join("reviewed-calibrations");
+            fs::create_dir_all(&directory)?;
+            let snapshot = directory.join(format!("{sha}.json"));
+            if !snapshot.exists() {
+                fs::write(&snapshot, &bytes)?;
+            }
+            let binding = directory.join(format!("{sha}.binding"));
+            fs::write(&binding, snapshot.to_string_lossy().as_bytes())?;
+            Ok(binding)
+        })()
+        .map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))?;
+        recipe.calibration_binding = Some(prepare);
+        // Recalibration reuses plasma products and queues the ion fitting steps.
+        recipe.steps.retain(|s| {
+            s.commands
+                .iter()
+                .any(|args| args.first().is_some_and(|a| a == "fit-ion"))
+        });
+    }
     let mut jobs = app.jobs.lock().unwrap();
     if let Some(j) = jobs
         .iter()
@@ -463,7 +594,7 @@ async fn enqueue(
     {
         return Ok(Json(j.clone()));
     }
-    let (steps, calibration) = steps(&app.config, recipe)
+    let (steps, calibration) = steps(&app.config, &recipe)
         .map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))?;
     if steps.iter().all(complete) {
         return Err((
@@ -731,12 +862,22 @@ async fn main() -> Result<()> {
     start_scan(app.clone());
     worker(app.clone());
     monitor(app.clone());
+    let millstone_routes = millstone_api::router(
+        app.config.state.clone(),
+        app.config.public.parent().unwrap().to_path_buf(),
+        app.config
+            .calibration_root
+            .clone()
+            .unwrap_or_else(|| app.config.state.join("calibration")),
+    );
     let router = Router::new()
         .route("/guisdap/api/catalog/jobs/{id}", post(enqueue))
         .route("/guisdap/api/catalog/rescan", post(rescan))
         .route("/guisdap/api/catalog/health", get(|| async { "ok" }))
         .layer(DefaultBodyLimit::max(1024))
-        .with_state(app);
+        .with_state(app)
+        .merge(live_monitor::router("/guisdap/api/catalog/live"))
+        .merge(millstone_routes);
     axum::serve(
         tokio::net::TcpListener::bind("127.0.0.1:8092").await?,
         router,
@@ -795,6 +936,7 @@ mod tests {
             worker_threads: 128,
             max_depth: 8,
             recipes: vec![],
+            calibration_root: None,
         };
         let app = App {
             config: Arc::new(c),
@@ -811,6 +953,60 @@ mod tests {
         assert_eq!(inv.experiments[0].hours.len(), 1);
         assert_eq!(inv.directories, 7);
         assert!(!authorized(&HeaderMap::new(), &app));
+    }
+    #[test]
+    fn plasma_config_is_published_for_its_experiment_without_calibration() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let mut c = Config {
+            roots: vec![],
+            public: root.join("public"),
+            state: root.join("state"),
+            repository: root.into(),
+            worker_threads: 1,
+            max_depth: 8,
+            recipes: vec![],
+            calibration_root: None,
+        };
+        let mut r = Recipe {
+            date: "2022-11-02".into(),
+            experiment: "beata@uhf".into(),
+            calibration_binding: None,
+            steps: vec![],
+        };
+        for (resolution, cadence) in [(1, 60), (0, 15)] {
+            let export = root.join(format!("plasma-{cadence}s"));
+            fs::create_dir_all(&export).unwrap();
+            r.steps.push(Step {
+                label: format!("Plasma-line {cadence} s"),
+                commands: vec![],
+                completion: export.join("index.json"),
+                link: format!("plasma.html?resolution={resolution}"),
+            });
+        }
+        let config = c
+            .public
+            .join(id(&r.date, &r.experiment))
+            .join("config.json");
+        steps(&c, &r).unwrap();
+        assert!(!config.exists()); // No published observation until data exists.
+        write_json(
+            &r.steps[0].completion,
+            &serde_json::json!({"frames":[{"id":"one"}]}),
+        )
+        .unwrap();
+        c.recipes.push(r.clone());
+        let mut entries = BTreeMap::new();
+        add_products(&c, &mut entries);
+        let v: serde_json::Value = serde_json::from_slice(&fs::read(config).unwrap()).unwrap();
+        assert_eq!(v["datasets"][0]["data_root"], "/guisdap/data/plasma-15s/");
+        assert_eq!(v["datasets"][1]["data_root"], "/guisdap/data/plasma-60s/");
+        assert_eq!(v["data_root"], v["datasets"][0]["data_root"]);
+        assert!(!c.public.join("config.json").exists());
+        assert!(entries[&id(&r.date, &r.experiment)]
+            .products
+            .iter()
+            .any(|p| p.complete));
     }
     #[test]
     fn partial_products_do_not_count_as_complete() {

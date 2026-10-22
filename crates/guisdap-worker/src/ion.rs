@@ -320,6 +320,7 @@ fn fit_gate(
         tie_electron_ion_temperature: altitude < cfg.tie_temperature_below_km,
         fit_collision_rate: false,
         fixed_collision_s: prescribed.collision_s,
+        ..Default::default()
     };
     let mut measurements = vec![];
     let mut addresses = vec![];

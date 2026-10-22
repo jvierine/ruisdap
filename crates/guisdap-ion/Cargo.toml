@@ -8,3 +8,5 @@ serde.workspace = true
 num-complex = "0.4"
 errorfunctions = "0.2"
 nalgebra = { version = "0.33", default-features = false, features = ["std"] }
+[dev-dependencies]
+serde_json.workspace = true

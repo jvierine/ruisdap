@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/guisdap-core", "crates/guisdap-worker", "crates/guisdap-web", "crates/guisdap-ion"]
+members = ["crates/guisdap-core", "crates/guisdap-worker", "crates/guisdap-web", "crates/guisdap-ion", "crates/guisdap-millstone", "crates/guisdap-digital-rf"]
 resolver = "2"
 
 [workspace.package]

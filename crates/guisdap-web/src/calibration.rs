@@ -5,6 +5,8 @@ use serde::Serialize;
 #[derive(Deserialize, Clone)]
 struct Settings {
     ion_index_url: String,
+    #[serde(default)]
+    experiment_id: Option<String>,
     radar_frequency_hz: f64,
     calibration_multiplier: f64,
     #[serde(default)]
@@ -375,14 +377,10 @@ fn table(state: &Cal) {
         "href",
         &format!("data:application/json;charset=utf-8,{uri}"),
     );
-    let mut graph=String::from("<svg viewBox='0 0 650 310' style='width:100%;max-width:700px;font:12px system-ui;fill:#c8d5e0' role='img' aria-label='Absolute magic constant versus altitude'><text x='60' y='20'>Magic constant versus altitude</text>");
-    for h in [50, 150, 250, 350, 450] {
-        let y = 270. - (h as f64 - 40.) / 440. * 230.;
-        graph.push_str(&format!("<text x='50' y='{y}' text-anchor='end'>{h}</text><path d='M60,{y} H610' stroke='#344652'/>"));
-    }
     let lower = c
         .points
         .iter()
+        .filter(|p| p.magic_constant > 0.)
         .map(|p| p.magic_constant.log10())
         .fold(0., f64::min)
         .floor()
@@ -390,31 +388,19 @@ fn table(state: &Cal) {
     let upper = c
         .points
         .iter()
+        .filter(|p| p.magic_constant > 0.)
         .map(|p| p.magic_constant.log10())
         .fold(0., f64::max)
         .ceil()
         + 0.2;
-    for i in 0..=4 {
-        let z = lower + (upper - lower) * i as f64 / 4.;
-        let px = 60. + 550. * i as f64 / 4.;
-        graph.push_str(&format!(
-            "<text x='{px}' y='295' text-anchor='middle'>{:.2}</text>",
-            10_f64.powf(z)
-        ));
-    }
-    for (i, p) in c.points.iter().enumerate() {
-        let x = 60. + 550. * (p.magic_constant.log10() - lower) / (upper - lower);
-        let y = 270. - (p.altitude_km - 40.) / 440. * 230.;
-        graph.push_str(&format!(
-            "<circle cx='{x}' cy='{y}' r='5' fill='{}'/><text x='{}' y='{y}'>{}</text>",
-            if p.included { "#efbc50" } else { "#aa647c" },
-            x + 8.,
-            i + 1
-        ));
-    }
-    graph.push_str("</svg>");
-    el("cal-accumulated").set_inner_html(&graph);
-    let mut scatter=String::from("<svg viewBox='0 0 650 330' style='width:100%;max-width:700px;font:12px system-ui;fill:#c8d5e0' role='img' aria-label='Calibration predicted versus measured short-lag power'><text x='60' y='20'>Predicted versus measured 10 µs raw Ne</text>");
+    let dots = |included: bool| {
+        c.points
+            .iter()
+            .filter(|p| p.included == included && p.magic_constant > 0.)
+            .flat_map(|p| [p.magic_constant.log10(), p.altitude_km])
+            .collect::<Vec<_>>()
+    };
+    crate::plotting::shared_curve("cal-accumulated",&serde_json::json!({"title":"Magic constant versus altitude","bounds":[lower,upper,40.,480.],"xlabel":"Magic constant","xformat":"log10","ylabel":"Altitude / km","series":[{"xy":dots(true),"style":0,"radius":4},{"xy":dots(false),"style":1,"radius":4,"color":"#986327"}]}).to_string());
     let lo = c
         .points
         .iter()
@@ -424,6 +410,7 @@ fn table(state: &Cal) {
                 p.raw_ne_proxy_m3 * p.estimate.calibration_multiplier_ratio,
             ]
         })
+        .filter(|v| *v > 0.)
         .map(f64::log10)
         .fold(11., f64::min)
         .floor()
@@ -437,19 +424,11 @@ fn table(state: &Cal) {
                 p.raw_ne_proxy_m3 * p.estimate.calibration_multiplier_ratio,
             ]
         })
+        .filter(|v| *v > 0.)
         .map(f64::log10)
         .fold(11., f64::max)
         .ceil()
         + 0.1;
-    let x = |z: f64| 60. + 550. * (z - lo) / (hi - lo);
-    let y = |z: f64| 270. - 230. * (z - lo) / (hi - lo);
-    for i in 0..=4 {
-        let z = lo + (hi - lo) * i as f64 / 4.;
-        let px = x(z);
-        let py = y(z);
-        scatter.push_str(&format!("<text x='{px}' y='292' text-anchor='middle'>{:.1e}</text><text x='55' y='{py}' text-anchor='end'>{:.1e}</text>",10_f64.powf(z),10_f64.powf(z)));
-    }
-    scatter.push_str("<path d='M60,270 L610,40' stroke='#617889' stroke-dasharray='4 4'/><text x='325' y='320' text-anchor='middle'>Measured raw Ne at C=1 / m⁻³ · dashed: C=1</text>");
     let samples: Vec<_> = c
         .points
         .iter()
@@ -463,45 +442,37 @@ fn table(state: &Cal) {
         })
         .collect();
     let gain_fit = guisdap_core::calibration::fit_gain(&samples);
-    scatter.push_str("<defs><clipPath id='cal-fit-clip'><rect x='60' y='40' width='550' height='230'/></clipPath></defs><g clip-path='url(#cal-fit-clip)'>");
-    if let Some(fit) = &gain_fit {
-        if let Some(se) = fit.standard_error {
-            let lower = fit.gain - se;
-            let upper = fit.gain + se;
-            let yl = |z: f64| {
-                if lower > 0. {
-                    y(z + lower.log10())
-                } else {
-                    270.
-                }
-            };
-            scatter.push_str(&format!(
-                "<path d='M60,{} L610,{} L610,{} L60,{} Z' fill='#a9fff3' fill-opacity='0.30'/>",
-                y(lo + upper.log10()),
-                y(hi + upper.log10()),
-                yl(hi),
-                yl(lo)
-            ));
-        }
-        scatter.push_str(&format!(
-            "<path d='M60,{} L610,{}' fill='none' stroke='#a9fff3' stroke-width='2'/>",
-            y(lo + fit.gain.log10()),
-            y(hi + fit.gain.log10())
-        ));
-    }
-    scatter.push_str("</g>");
-    for (i, p) in c.points.iter().enumerate() {
-        let px = x((p.raw_ne_proxy_m3 / p.original_calibration_multiplier).log10());
-        let py = y((p.raw_ne_proxy_m3 * p.estimate.calibration_multiplier_ratio).log10());
-        scatter.push_str(&format!(
-            "<circle cx='{px}' cy='{py}' r='5' fill='{}'/><text x='{}' y='{py}'>{}</text>",
-            if p.included { "#efbc50" } else { "#aa647c" },
-            px + 8.,
-            i + 1
-        ));
-    }
-    scatter.push_str("</svg>");
-    el("cal-power-scatter").set_inner_html(&scatter);
+    let scatter = |included: bool| {
+        c.points
+            .iter()
+            .filter(|p| p.included == included)
+            .flat_map(|p| {
+                [
+                    (p.raw_ne_proxy_m3 / p.original_calibration_multiplier).log10(),
+                    (p.raw_ne_proxy_m3 * p.estimate.calibration_multiplier_ratio).log10(),
+                ]
+            })
+            .collect::<Vec<_>>()
+    };
+    let line: Vec<_> = gain_fit
+        .iter()
+        .flat_map(|fit| [lo, lo + fit.gain.log10(), hi, hi + fit.gain.log10()])
+        .collect();
+    let band: Vec<_> = gain_fit
+        .iter()
+        .filter_map(|f| f.standard_error.map(|e| (f.gain, e)))
+        .flat_map(|(g, e)| {
+            [
+                lo,
+                lo + (g - e).max(1e-30).log10(),
+                lo + (g + e).log10(),
+                hi,
+                hi + (g - e).max(1e-30).log10(),
+                hi + (g + e).log10(),
+            ]
+        })
+        .collect();
+    crate::plotting::shared_curve("cal-power-scatter",&serde_json::json!({"title":"Predicted versus measured short-lag power","bounds":[lo,hi,lo,hi],"xlabel":"Measured raw Ne at C=1 / m⁻³","ylabel":"Predicted raw Ne / m⁻³","xformat":"log10","yformat":"log10","series":[{"xy":[lo,lo,hi,hi],"color":"#7b929e"},{"xy":line},{"xy":scatter(true),"style":0,"radius":4},{"xy":scatter(false),"style":1,"radius":4,"color":"#986327"}],"bands":[{"values":band,"color":"#236b8e4d"}]}).to_string());
     text(
         "cal-fit-summary",
         &match gain_fit {
@@ -598,23 +569,8 @@ fn candidates(c: &Calibration, bounds: [f64; 2]) {
     input("cal-height").set_value(&((bounds[0] + bounds[1]) / 2.).to_string());
     let s = c.settings.as_ref().unwrap();
     let mut options = String::from("<option value=''>Select source altitude…</option>");
-    let mut plot=String::from("<svg viewBox='0 0 650 300' role='img' aria-label='Candidate altitude versus predicted plasma frequency' style='width:100%;max-width:700px;font:12px system-ui;fill:#c8d5e0'>");
-    for i in 0..=4 {
-        let h = bounds[0] + (bounds[1] - bounds[0]) * i as f64 / 4.;
-        let y = 255. - 210. * i as f64 / 4.;
-        plot.push_str(&format!("<path d='M60,{y} H610' stroke='#344652'/><text x='55' y='{}' text-anchor='end'>{h:.0}</text>",y+4.));
-    }
-    for f in 2..=6 {
-        let x = 60. + 550. * (f as f64 - 1.) / 6.;
-        plot.push_str(&format!(
-            "<text x='{x}' y='279' text-anchor='middle'>{f}</text>"
-        ));
-    }
-    plot.push_str("<text x='325' y='298' text-anchor='middle'>|Frequency offset| / MHz</text><text x='60' y='20'>Altitude / km · fitted-density prediction; gold = eligible fit</text>");
-    let picked = 60. + 550. * (p.frequency.abs() / 1e6 - 1.) / 6.;
-    plot.push_str(&format!(
-        "<path d='M{picked},35 V255' stroke='#a9fff3' stroke-dasharray='4 4'/>"
-    ));
+    let mut good = Vec::new();
+    let mut bad = Vec::new();
     for (i, g) in p.profile.gates.iter().enumerate() {
         if g.altitude_km < bounds[0] || g.altitude_km > bounds[1] {
             continue;
@@ -632,13 +588,14 @@ fn candidates(c: &Calibration, bounds: [f64; 2]) {
             g.altitude_km, predicted, g.status
         ));
         if (1. ..=7.).contains(&predicted) {
-            let x = 60. + 550. * (predicted - 1.) / 6.;
-            let y = 255. - 210. * (g.altitude_km - bounds[0]) / (bounds[1] - bounds[0]);
-            plot.push_str(&format!("<circle cx='{x}' cy='{y}' r='4' fill='{}'><title>{:.1} km; {:.3} MHz</title></circle>",if safe_fit(g){"#efbc50"}else{"#aa647c"},g.altitude_km,predicted));
+            if safe_fit(g) {
+                good.extend([predicted, g.altitude_km]);
+            } else {
+                bad.extend([predicted, g.altitude_km]);
+            }
         }
     }
-    plot.push_str("</svg>");
-    el("cal-candidates").set_inner_html(&plot);
+    crate::plotting::shared_curve("cal-candidates",&serde_json::json!({"title":"Candidate plasma frequency","bounds":[1.,7.,bounds[0],bounds[1]],"xlabel":"|Frequency offset| / MHz","ylabel":"Altitude / km","series":[{"xy":good,"style":0,"radius":4},{"xy":bad,"style":1,"radius":4,"color":"#986327"},{"xy":[p.frequency.abs()/1e6,bounds[0],p.frequency.abs()/1e6,bounds[1]],"color":"#986327"}]}).to_string());
     el("cal-altitude").set_inner_html(&options);
 }
 pub(super) fn start(app: State) -> Result<(), JsValue> {
@@ -691,6 +648,7 @@ pub(super) fn start(app: State) -> Result<(), JsValue> {
     }));
     app.borrow_mut().calibration = Some(state.clone());
     gestures(&state)?;
+    recalculation(&state)?;
     table(&state);
     let loaded = state.clone();
     spawn_local(async move {
@@ -1051,9 +1009,9 @@ pub(super) fn markers(a: &App, c: &Calibration) {
     for (i, saved) in c.points.iter().enumerate() {
         let p = saved;
         let color = if c.editing == Some(i) {
-            "#a9fff3"
+            "#236b8e"
         } else {
-            "#ffce58"
+            "#986327"
         };
         let tx = (p.time_unix - a.view_start) / (a.view_end - a.view_start);
         let fy = (a.broad_frequency[1] + 12500. - p.frequency_hz)
@@ -1062,7 +1020,7 @@ pub(super) fn markers(a: &App, c: &Calibration) {
             / (a.profile_altitude[1] - a.profile_altitude[0]);
         let label = format!("{} · {:.3} MHz", i + 1, p.frequency_hz / 1e6);
         let dot = |x: f64, y: f64| {
-            format!("<circle cx='{x}' cy='{y}' r='6' fill='#10232b' stroke='{color}' stroke-width='2'/><text x='{}' y='{}' fill='{color}' font-size='12'>{label}</text>",x+9.,y-9.)
+            format!("<circle cx='{x}' cy='{y}' r='6' fill='#ffffff' stroke='{color}' stroke-width='2'/><text x='{}' y='{}' fill='{color}' font-size='12'>{label}</text>",x+9.,y-9.)
         };
         if (0. ..=1.).contains(&tx) {
             let b = p.broad_gate - 1;
@@ -1079,21 +1037,24 @@ pub(super) fn markers(a: &App, c: &Calibration) {
             && p.plasma_end_unix > f.start_unix
             && (0. ..=1.).contains(&ay)
         {
-            let px = 52.
-                + 280. * (p.raw_ne_proxy_m3 / a.profile_power[0]).log10()
+            let rect = el("profile")
+                .query_selector("canvas")
+                .ok()
+                .flatten()
+                .map(|c| c.get_bounding_client_rect());
+            let width = rect.as_ref().map_or(380., |r| r.width());
+            let height = rect.as_ref().map_or(380., |r| r.height());
+            let px = 76.
+                + (width - 100.) * (p.raw_ne_proxy_m3 / a.profile_power[0]).log10()
                     / (a.profile_power[1] / a.profile_power[0]).log10();
-            if (52. ..=332.).contains(&px) {
-                profile.push_str(&dot(px, 30. + 280. * ay));
+            if (76. ..=width - 24.).contains(&px) {
+                profile.push_str(&format!("<span style='position:absolute;left:{px}px;top:{}px;transform:translate(-50%,-50%);color:#986327;font-size:20px'>○<small>{}</small></span>",22.+(height-80.)*ay,i+1));
                 let expected = p.raw_ne_proxy_m3 * p.estimate.calibration_multiplier_ratio;
-                let ex = 52.
-                    + 280. * (expected / a.profile_power[0]).log10()
+                let ex = 76.
+                    + (width - 100.) * (expected / a.profile_power[0]).log10()
                         / (a.profile_power[1] / a.profile_power[0]).log10();
-                if (52. ..=332.).contains(&ex) {
-                    profile.push_str(&format!(
-                        "<rect x='{}' y='{}' width='8' height='8' fill='none' stroke='{color}'/>",
-                        ex - 4.,
-                        26. + 280. * ay
-                    ));
+                if (76. ..=width - 24.).contains(&ex) {
+                    profile.push_str(&format!("<span title='Predicted short-lag power' style='position:absolute;left:{ex}px;top:{}px;width:8px;height:8px;transform:translate(-50%,-50%);border:1px solid #986327'></span>",22.+(height-80.)*ay));
                 }
             }
         }
@@ -1116,17 +1077,14 @@ pub(super) fn markers(a: &App, c: &Calibration) {
             r.height()
         ));
     }
-    if let Ok(Some(svg)) = el("profile").query_selector("svg") {
-        if let Ok(Some(old)) = svg.query_selector("#cal-markers") {
-            old.remove();
-        }
-        let g = doc()
-            .create_element_ns(Some("http://www.w3.org/2000/svg"), "g")
-            .unwrap();
-        let _ = g.set_attribute("id", "cal-markers");
-        g.set_inner_html(&profile);
-        let _ = svg.append_child(&g);
+    let host = el("profile");
+    if doc().get_element_by_id("cal-profile-marks").is_none() {
+        let layer = doc().create_element("div").unwrap();
+        layer.set_id("cal-profile-marks");
+        let _ = layer.set_attribute("style", "position:absolute;inset:0;pointer-events:none");
+        let _ = host.append_child(&layer);
     }
+    el("cal-profile-marks").set_inner_html(&profile);
 }
 #[derive(Clone, Copy)]
 struct Drag {
@@ -1139,7 +1097,7 @@ struct Drag {
 }
 fn coords(id: &str, e: &web_sys::PointerEvent) -> (f64, f64) {
     let target = if id == "profile" {
-        el(id).query_selector("svg").unwrap().unwrap()
+        el(id).query_selector("canvas").unwrap().unwrap()
     } else {
         el(id)
     };
@@ -1147,8 +1105,8 @@ fn coords(id: &str, e: &web_sys::PointerEvent) -> (f64, f64) {
     let mut x = (e.client_x() as f64 - r.left()) / r.width();
     let mut y = (e.client_y() as f64 - r.top()) / r.height();
     if id == "profile" {
-        x = (x * 360. - 52.) / 280.;
-        y = (y * 360. - 30.) / 280.;
+        x = (x * r.width() - 76.) / (r.width() - 100.);
+        y = (y * r.height() - 22.) / (r.height() - 80.);
     }
     (x.clamp(0., 1.), y.clamp(0., 1.))
 }
@@ -1251,10 +1209,10 @@ fn gestures(state: &Cal) -> Result<(), JsValue> {
             let r = el(id).get_bounding_client_rect();
             let (left, top, w, h) = if id == "profile" {
                 (
-                    (52. + 280. * x.min(drag.x)) / 360.,
-                    (30. + 280. * y.min(drag.y)) / 360.,
-                    280. * (x - drag.x).abs() / 360.,
-                    280. * (y - drag.y).abs() / 360.,
+                    (76. + (r.width() - 100.) * x.min(drag.x)) / r.width(),
+                    (22. + (r.height() - 80.) * y.min(drag.y)) / r.height(),
+                    (r.width() - 100.) * (x - drag.x).abs() / r.width(),
+                    (r.height() - 80.) * (y - drag.y).abs() / r.height(),
                 )
             } else {
                 (
@@ -1541,4 +1499,88 @@ fn peak_height(c: &Calibration, bounds: [f64; 2]) -> Option<f64> {
         })
         .max_by(|a, b| a.1.total_cmp(&b.1))
         .map(|p| p.0)
+}
+
+/// Freeze the exact saved notebook revision into an authenticated queue job.
+fn recalculation(state: &Cal) -> Result<(), JsValue> {
+    let state = state.clone();
+    let callback = Closure::<dyn FnMut()>::new(move || {
+        let request = (|| -> Result<(String, String, u64), JsValue> {
+            let c = state.borrow();
+            let sync = c.sync.borrow();
+            if !sync.ready || sync.busy || sync.pending.is_some() {
+                return Err(error(
+                    "Wait for the calibration revision to finish saving before recalculating.",
+                ));
+            }
+            if !c.points.iter().any(|p| p.included) {
+                return Err(error("Include reviewed calibration points first."));
+            }
+            let query = web_sys::window().unwrap().location().search()?;
+            let id = query
+                .trim_start_matches('?')
+                .split('&')
+                .find_map(|s| s.strip_prefix("experiment=").map(str::to_owned))
+                .or_else(|| c.settings.as_ref().and_then(|s| s.experiment_id.clone()))
+                .ok_or_else(|| error("No processing recipe is associated with this observation"))?;
+            Ok((id, sync.key.clone(), sync.revision))
+        })();
+        let (id, key, revision) = match request {
+            Ok(v) => v,
+            Err(e) => {
+                text("cal-job-status", &e.as_string().unwrap_or_default());
+                return;
+            }
+        };
+        let token = input("cal-processing-key").value();
+        if token.trim().is_empty() {
+            text(
+                "cal-job-status",
+                "Enter the processing key under Processing access.",
+            );
+            return;
+        }
+        text("cal-job-status", "Queuing the saved calibration revision…");
+        spawn_local(async move {
+            let result = async {
+                let init = web_sys::RequestInit::new();
+                init.set_method("POST");
+                let headers = web_sys::Headers::new()?;
+                headers.set("Authorization", &format!("Bearer {}", token.trim()))?;
+                headers.set("Content-Type", "application/json")?;
+                init.set_headers(&headers);
+                init.set_body(
+                    &serde_json::json!({"notebook_key":key,"revision":revision})
+                        .to_string()
+                        .into(),
+                );
+                let response: web_sys::Response = JsFuture::from(
+                    web_sys::window()
+                        .unwrap()
+                        .fetch_with_str_and_init(&format!("api/catalog/jobs/{id}"), &init),
+                )
+                .await?
+                .dyn_into()?;
+                let body = JsFuture::from(response.text()?)
+                    .await?
+                    .as_string()
+                    .unwrap_or_default();
+                if !response.ok() {
+                    return Err(error(body));
+                }
+                Ok(())
+            }
+            .await;
+            match result {
+                Ok(()) => {
+                    el("cal-job-status").set_inner_html("Ion-line recalculation queued. <a href='live.html'>View processing status</a>.");
+                }
+                Err(e) => text("cal-job-status", &e.as_string().unwrap_or_default()),
+            }
+        });
+    });
+    el("cal-recalculate")
+        .add_event_listener_with_callback("click", callback.as_ref().unchecked_ref())?;
+    callback.forget();
+    Ok(())
 }

@@ -27,6 +27,19 @@ const ROWS = [
   {name: 'Raw Ne / m⁻³', p: 4, mode: 1, palette: 1, colormap: 'plasma'},
 ];
 
+// One to three sentences per dataset, by analysis id (the info panel).
+const ABOUT = [
+  [/^historical$/, "Products of the older Python pipeline (30 µs gates), imported by Juha and calibrated with the plasma lines. No satellite removal."],
+  [/^native-(full-)?20261019$/, "An early test of Juha's Rust pipeline on a sample of pulses only (16 lags, 200–540 km). Incomplete; not for comparisons."],
+  [/^native-direct-live/, "Juha's Rust pipeline, reading the raw recordings directly and subtracting every CFAR-detected satellite echo from the voltages. Fitted window by window while it ran; its subtraction is still under Juha's review."],
+  [/^native-debris400-.*live/, "The same as the strict Rust run (echoes at least 3 dB above the CFAR threshold, above 400 km), published window by window while it ran; once complete it matches that run."],
+  [/^native-debris400/, "Juha's Rust pipeline with a stricter subtraction: only echoes at least 3 dB above the CFAR threshold and above 400 km altitude are subtracted from the voltages."],
+  [/^isr-nosat/, "Our variance-weighted lag profile inversion with a background column; satellite echoes are left in (variant 3, Memo 42)."],
+  [/^isr-detected/, "Our inversion with each detected satellite echo modelled as an extra unknown, on the pulses where the detector found it (variant 5, Memo 42)."],
+  [/^isr-tracked/, "As variant 5, with pass tracking: detections are linked into passes and every pulse of a pass gets a column, also those the detector missed (Memo 45)."],
+];
+const about = id => (ABOUT.find(([re]) => re.test(id)) || [null, ''])[1];
+
 // Ne from the fitted proxy with the finite-Debye ion-power correction, as
 // millstone.js computes it for calibrated quicklook analyses.
 function calibratedDensity(m, proxy, te, ti) {
@@ -65,8 +78,11 @@ async function load(choice) {
   }
   // a native analysis shows its source's raw Ne, not its own: leave it out
   const rawPhysical = !native && m.raw_units === 'm^-3';
+  const sorted = a => [...a].sort((x, y) => x - y), median = a => {const b = sorted(a); return b.length ? (b[(b.length - 1) >> 1] + b[b.length >> 1]) / 2 : NaN;};
+  const windowS = median(m.fits.map(f => f.end_unix_s - f.start_unix_s));
+  const gateKm = median(m.range_m.slice(1).map((r, i) => (r - m.range_m[i]) / 1000));
   return {
-    m, label: choice.label, gain, rawPhysical,
+    m, label: choice.label, gain, rawPhysical, windowS, gateKm, fitCount: m.fits.length,
     time: m.fit_times.map(t => t - dayStart), range: m.range_m.map(r => r / 1000),
     intervals: m.fits.map(f => [f.start_unix_s - dayStart, f.end_unix_s - dayStart]),
     maps, raw, rawTime: m.raw_times.map(t => t - dayStart), rawRange: m.raw_range_m.map(r => r / 1000),
@@ -124,6 +140,8 @@ async function draw(before, after, bounds) {
   const host = el('cmp-maps');
   host.replaceChildren();
   const panels = [];
+  const res = d => `${d.label}: ${d.fitCount} fits, median window ${Math.round(d.windowS)} s, range cells ${d.gateKm.toFixed(1)} km`;
+  el('cmp-info-selected').textContent = `Selected now. Before: ${res(before)}. After: ${res(after)}.`;
   el('cmp-left').textContent = 'Before (left): ' + before.label;
   el('cmp-right').textContent = 'After (right): ' + after.label;
   const shown = new Set([...document.querySelectorAll('#cmp-params input:checked')].map(x => Number(x.value)));
@@ -171,6 +189,17 @@ async function main() {
     const o = document.createElement('option'); o.value = c.id; o.textContent = c.label; el(id).append(o);
   }
   const has = id => choices.some(c => c.id === id);
+  for (const c of choices) {
+    const dt = document.createElement('dt'), dd = document.createElement('dd');
+    dt.textContent = c.label; dd.textContent = about(c.id) || '—';
+    el('cmp-info-list').append(dt, dd);
+  }
+  el('cmp-info-btn').onclick = () => {
+    const open = el('cmp-info').hidden; el('cmp-info').hidden = !open;
+    el('cmp-info-btn').setAttribute('aria-expanded', String(open));
+    requestAnimationFrame(applySplit);
+  };
+  if (query.get('info') === '1') el('cmp-info-btn').onclick();
   el('cmp-before').value = has(query.get('before')) ? query.get('before') : has('isr-nosat-v1') ? 'isr-nosat-v1' : 'historical';
   el('cmp-after').value = has(query.get('after')) ? query.get('after') : has('isr-tracked-v1') ? 'isr-tracked-v1' : choices.at(-1).id;
   const dayWindow = [Number(query.get('start')) || 11 * 3600, Number(query.get('end')) || 23 * 3600];

@@ -9,14 +9,25 @@
 .swipe-after{z-index:1}
 .swipe-after{clip-path:inset(0 0 0 var(--split,50%));background:#fff}
 .swipe-after h3{visibility:hidden}
+.cmp-info-btn{border-radius:50%;width:28px;height:28px;padding:0;font-weight:700;font-family:Georgia,serif}
+.cmp-info{max-width:900px;margin:6px 0 10px;padding:10px 14px;border:1px solid #c9d6de;border-radius:4px;background:#f6f9fb;font-size:14px;line-height:1.45}
+.cmp-info dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 14px;margin:6px 0}
+.cmp-info dt{font-weight:600}.cmp-info dd{margin:0}
+.cmp-info h2{font-size:15px;margin:10px 0 4px}
 .swipe-handle{position:absolute;width:14px;margin-left:-7px;cursor:ew-resize;z-index:5;touch-action:none}
 .swipe-handle span{position:absolute;left:6px;top:0;bottom:0;width:2px;background:#d6336c;box-shadow:0 0 0 1px #fff}
 .swipe-handle::after{content:'⇔';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:#d6336c;color:#fff;border-radius:10px;padding:1px 5px;font-size:13px}
 </style></head><body><header class="site-header"><a class="brand" href="index.html">RUISDAP</a><nav><a href="millstone.html">Millstone viewer</a></nav></header><main>
 <h1>Before and after mitigation</h1>
 <p class="caption">Two analyses of the same day on the same axes and colour limits. Left of the bar: before; right: after. Drag the bar (or use the slider) to move the split; drag a map to pan, Ctrl/Cmd-wheel to zoom, right-click to reset. Where the analyses have different range gates, both are shown on the finer grid, each cell taking the value of the gate it lies in.</p>
-<div class="cmp-controls"><label>Day <select id="cmp-day"></select></label><label>Before <select id="cmp-before"></select></label><button id="cmp-swap" title="Swap before and after">⇄</button><label>After <select id="cmp-after"></select></label><label>Split <input id="cmp-split" type="range" min="0" max="1000" value="500"></label></div>
+<div class="cmp-controls"><label>Day <select id="cmp-day"></select></label><label>Before <select id="cmp-before"></select></label><button id="cmp-info-btn" class="cmp-info-btn" aria-expanded="false" aria-controls="cmp-info" title="About the datasets and their resolution">i</button><button id="cmp-swap" title="Swap before and after">⇄</button><label>After <select id="cmp-after"></select></label><label>Split <input id="cmp-split" type="range" min="0" max="1000" value="500"></label></div>
 <div class="cmp-controls" id="cmp-params"><span>Show (at most 4):</span></div>
+<div id="cmp-info" class="cmp-info" hidden>
+<h2>The datasets of this day</h2><dl id="cmp-info-list"></dl>
+<h2>Why the resolution looks different</h2>
+<p>Juha's Rust analyses and Historical fit one window per zenith antenna cycle, about 190 s, on 4.5 km range cells (240 cells, matching the 30 µs code bauds), averaged over 6 cells (about 27 km) at 300–700 km before the fit. The isr_analysis runs fit 60 s windows, about three per zenith cycle (219 fits on 8 April 11–23 UTC against 145 for the whole day), on 9 km gates (116 gates of 60 µs), averaged over 7 gates (about 63 km) at 300–700 km. So the Rust maps have columns about three times wider and finer range structure, and their longer windows make the topside less noisy; differences between the two sides mix the satellite method with this averaging.</p>
+<p id="cmp-info-selected"></p>
+</div>
 <p id="cmp-status" role="status">Loading…</p>
 <div class="cmp-legend"><span id="cmp-left"></span><span id="cmp-right"></span></div>
 <div id="cmp-maps" class="parameter-stack"></div>

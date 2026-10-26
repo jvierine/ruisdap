@@ -751,5 +751,7 @@ colour limits, and a vertical bar (drag it, or use the slider) shows the
 zoom are shared. Where the range gates differ, both are shown on the finer
 grid, each cell taking the value of the gate it lies in. At most four
 parameters are shown at once: each map uses two WebGL contexts, and browsers
-drop the oldest beyond about sixteen. Native analyses are not supported yet.
+drop the oldest beyond about sixteen. Native (Rust) analyses are compared
+with their absolute Ne as stored; their raw-Ne row is left out, since a native
+analysis shows its source's raw Ne rather than its own.
 Example: `compare.html?date=2024-04-08&before=isr-nosat-v1&after=isr-tracked-v1`.

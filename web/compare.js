@@ -43,15 +43,18 @@ function calibratedDensity(m, proxy, te, ti) {
 async function load(choice) {
   const root = choice.data_root.endsWith('/') ? choice.data_root : choice.data_root + '/';
   const m = await json(root + 'manifest.json');
-  if (m.analysis_kind === 'native') throw Error(`${choice.label}: native analyses are not supported in this comparison yet`);
+  // Native (Rust) analyses store absolute Ne in their parameters and point
+  // their raw Ne and plasma panels at the source export by an absolute URL.
+  const native = m.analysis_kind === 'native';
+  const url = u => (u.startsWith('/') ? u : root + u);
   const dayStart = Date.parse(m.date + 'T00:00:00Z') / 1000;
   const nt = m.fit_times.length, nr = m.range_m.length;
-  const params = await floats(root + m.parameters_url);
-  const raw = await floats(root + m.raw_url);
-  const gain = m.calibration?.gain || null;
+  const params = await floats(url(m.parameters_url));
+  const raw = await floats(url(m.raw_url));
+  const gain = native ? m.native_calibration?.gain || null : m.calibration?.gain || null;
   const maps = [];
   for (let p = 0; p < 4; p++) maps.push(params.subarray(p * nt * nr, (p + 1) * nt * nr));
-  if (gain) {
+  if (gain && !native) {
     // density map from the proxy, as the main viewer does
     const ne = new Float32Array(nt * nr);
     m.fits.forEach((f, t) => f.parameters.forEach((row, r) => {
@@ -60,7 +63,8 @@ async function load(choice) {
     }));
     maps[0] = ne;
   }
-  const rawPhysical = m.raw_units === 'm^-3';
+  // a native analysis shows its source's raw Ne, not its own: leave it out
+  const rawPhysical = !native && m.raw_units === 'm^-3';
   return {
     m, label: choice.label, gain, rawPhysical,
     time: m.fit_times.map(t => t - dayStart), range: m.range_m.map(r => r / 1000),

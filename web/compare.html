@@ -9,7 +9,7 @@
 .swipe-after{z-index:1}
 .swipe-after{clip-path:inset(0 0 0 var(--split,50%));background:#fff}
 .swipe-after h3{visibility:hidden}
-.cmp-info-btn{border-radius:50%;width:28px;height:28px;padding:0;font-weight:700;font-family:Georgia,serif}
+.cmp-info-btn{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;flex:0 0 26px;width:26px;height:26px;min-width:0;min-height:0;padding:0;border-radius:50%;line-height:1;font:italic 700 15px Georgia,serif}
 .cmp-info{max-width:900px;margin:6px 0 10px;padding:10px 14px;border:1px solid #c9d6de;border-radius:4px;background:#f6f9fb;font-size:14px;line-height:1.45}
 .cmp-info dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 14px;margin:6px 0}
 .cmp-info dt{font-weight:600}.cmp-info dd{margin:0}
@@ -20,7 +20,7 @@
 </style></head><body><header class="site-header"><a class="brand" href="index.html">RUISDAP</a><nav><a href="millstone.html">Millstone viewer</a></nav></header><main>
 <h1>Before and after mitigation</h1>
 <p class="caption">Two analyses of the same day on the same axes and colour limits. Left of the bar: before; right: after. Drag the bar (or use the slider) to move the split; drag a map to pan, Ctrl/Cmd-wheel to zoom, right-click to reset. Where the analyses have different range gates, both are shown on the finer grid, each cell taking the value of the gate it lies in.</p>
-<div class="cmp-controls"><label>Day <select id="cmp-day"></select></label><label>Before <select id="cmp-before"></select></label><button id="cmp-info-btn" class="cmp-info-btn" aria-expanded="false" aria-controls="cmp-info" title="About the datasets and their resolution">i</button><button id="cmp-swap" title="Swap before and after">⇄</button><label>After <select id="cmp-after"></select></label><label>Split <input id="cmp-split" type="range" min="0" max="1000" value="500"></label></div>
+<div class="cmp-controls"><label>Day <select id="cmp-day"></select></label><label>Before <select id="cmp-before"></select></label><button id="cmp-swap" title="Swap before and after">⇄</button><label>After <select id="cmp-after"></select></label><label>Split <input id="cmp-split" type="range" min="0" max="1000" value="500"></label><button id="cmp-info-btn" class="cmp-info-btn" aria-expanded="false" aria-controls="cmp-info" title="About the datasets and their resolution">i</button></div>
 <div class="cmp-controls" id="cmp-params"><span>Show (at most 4):</span></div>
 <div id="cmp-info" class="cmp-info" hidden>
 <h2>The datasets of this day</h2><dl id="cmp-info-list"></dl>

@@ -721,3 +721,25 @@ legacy checkpoints require a fresh product version rather than silently
 reusing products generated with different thresholds. The direct DigitalRF
 reader, pulse selection, calibration, lag inversion and fitting settings
 remain unchanged. No neighbouring-pulse option is accepted by the manifest.
+
+## isr_analysis analyses (Henrik, 26 October 2026)
+
+`scripts/export-isr-analysis-view.py` writes one day of an
+[isr_analysis](https://github.com/ionodev/isr_analysis) run (the FYS-3730
+satellite and RFI mitigation work) in the quicklook schema, as an extra
+analysis beside Historical and the native runs. It reads that run's
+`fit_lpi.py` products (`lpi_60/<channel>/pp-*.h5`) and its 10-second
+inversions (`lpi-*.h5`). Ne is the fitted proxy times the run's own density
+constant (7.15e8 W m^-3 K^-1 km^-2 for its lpi_60 products, from the
+digisonde, isr_analysis memo 43), with the viewer's finite-Debye correction;
+raw Ne is the run's own 10 us lag with Te/Ti = 1. The plasma-line panel
+references the day's existing export. `scripts/register-millstone-analysis.py`
+adds or removes one analysis in `catalog/millstone-config.json` under the
+config's lock file.
+
+First exports (7 and 8 April, ZENITH, 11-23 UTC), staged on revontuli in
+`/mnt/data/henrik/viewer_exports_2026-10/`: `isr-nosat-v1` (variance-weighted
+LPI with a background column, no satellite handling), `isr-detected-v1`
+(satellite echoes as extra unknowns on the detected pulses), `isr-tracked-v1`
+(the same with pass tracking, isr_analysis memo 45). Publishing them needs
+write access to `data/` and `catalog/`.

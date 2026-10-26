@@ -743,3 +743,13 @@ LPI with a background column, no satellite handling), `isr-detected-v1`
 (satellite echoes as extra unknowns on the detected pulses), `isr-tracked-v1`
 (the same with pass tracking, isr_analysis memo 45). Publishing them needs
 write access to `data/` and `catalog/`.
+
+`web/compare.html` compares two analyses of one day before and after
+mitigation: each parameter map is drawn from both, on the same axes and
+colour limits, and a vertical bar (drag it, or use the slider) shows the
+"before" analysis left of it and the "after" analysis right of it; pan and
+zoom are shared. Where the range gates differ, both are shown on the finer
+grid, each cell taking the value of the gate it lies in. At most four
+parameters are shown at once: each map uses two WebGL contexts, and browsers
+drop the oldest beyond about sixteen. Native analyses are not supported yet.
+Example: `compare.html?date=2024-04-08&before=isr-nosat-v1&after=isr-tracked-v1`.

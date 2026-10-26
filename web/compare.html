@@ -1,0 +1,23 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RUISDAP · Millstone before/after</title><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="light.css"><style>
+.cmp-controls{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:10px 0}
+.cmp-controls label{display:flex;gap:6px;align-items:center}
+.cmp-controls select{max-width:420px}
+.cmp-legend{display:flex;justify-content:space-between;margin:6px 76px 0 76px;font:16px RustplotlibPagella,Palatino,serif;color:#314858}
+.swipe-row{position:relative;display:grid}
+.swipe-row>.swipe-layer{grid-area:1/1;position:relative;isolation:isolate}
+.swipe-before{z-index:0}
+.swipe-after{z-index:1}
+.swipe-after{clip-path:inset(0 0 0 var(--split,50%));background:#fff}
+.swipe-after h3{visibility:hidden}
+.swipe-handle{position:absolute;width:14px;margin-left:-7px;cursor:ew-resize;z-index:5;touch-action:none}
+.swipe-handle span{position:absolute;left:6px;top:0;bottom:0;width:2px;background:#d6336c;box-shadow:0 0 0 1px #fff}
+.swipe-handle::after{content:'⇔';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:#d6336c;color:#fff;border-radius:10px;padding:1px 5px;font-size:13px}
+</style></head><body><header class="site-header"><a class="brand" href="index.html">RUISDAP</a><nav><a href="millstone.html">Millstone viewer</a></nav></header><main>
+<h1>Before and after mitigation</h1>
+<p class="caption">Two analyses of the same day on the same axes and colour limits. Left of the bar: before; right: after. Drag the bar (or use the slider) to move the split; drag a map to pan, Ctrl/Cmd-wheel to zoom, right-click to reset. Where the analyses have different range gates, both are shown on the finer grid, each cell taking the value of the gate it lies in.</p>
+<div class="cmp-controls"><label>Day <select id="cmp-day"></select></label><label>Before <select id="cmp-before"></select></label><button id="cmp-swap" title="Swap before and after">⇄</button><label>After <select id="cmp-after"></select></label><label>Split <input id="cmp-split" type="range" min="0" max="1000" value="500"></label></div>
+<div class="cmp-controls" id="cmp-params"><span>Show (at most 4):</span></div>
+<p id="cmp-status" role="status">Loading…</p>
+<div class="cmp-legend"><span id="cmp-left"></span><span id="cmp-right"></span></div>
+<div id="cmp-maps" class="parameter-stack"></div>
+</main><script type="module" src="compare.js"></script></body></html>

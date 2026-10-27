@@ -37,6 +37,7 @@ const ABOUT = [
   [/^isr-nosat/, "Our variance-weighted lag profile inversion with a background column; satellite echoes are left in (variant 3, Memo 42)."],
   [/^isr-detected/, "Our inversion with each detected satellite echo modelled as an extra unknown, on the pulses where the detector found it (variant 5, Memo 42)."],
   [/^isr-tracked/, "As variant 5, with pass tracking: detections are linked into passes and every pulse of a pass gets a column, also those the detector missed (Memo 45)."],
+  [/^isr-v2rfi/, "Our final product: pass tracking with a lower detection threshold (false-alarm probability 1e-6, faint detections kept only when tracking links them into a pass; Memo 48), and the lagged products hit by power-line impulses removed from the inversion (Memo 47)."],
 ];
 const about = id => (ABOUT.find(([re]) => re.test(id)) || [null, ''])[1];
 

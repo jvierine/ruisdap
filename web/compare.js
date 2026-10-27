@@ -27,6 +27,15 @@ const ROWS = [
   {name: 'Raw Ne / m⁻³', p: 4, mode: 1, palette: 1, colormap: 'plasma'},
 ];
 
+// The eclipse of 8 April 2024 at Millstone Hill, at the ground (isr_analysis
+// eclipse_timing.py, astropy; 94 % of the Sun's disk covered at maximum),
+// seconds after 00 UTC: drawn as dashed vertical lines on every map.
+const ECLIPSE = {
+  '2024-04-08': [[18 * 3600 + 15 * 60 + 50, 'first contact'], [19 * 3600 + 29 * 60 + 30, 'maximum, 94 % obscured'],
+                 [20 * 3600 + 38 * 60 + 50, 'last contact']],
+};
+const hhmm = s => `${String(Math.floor(s / 3600)).padStart(2, '0')}:${String(Math.floor(s / 60) % 60).padStart(2, '0')}`;
+
 // One to three sentences per dataset, by analysis id (the info panel).
 const ABOUT = [
   [/^historical$/, "Products of the older Python pipeline (30 µs gates), imported by Juha and calibrated with the plasma lines. No satellite removal."],
@@ -37,7 +46,7 @@ const ABOUT = [
   [/^isr-nosat/, "Our variance-weighted lag profile inversion with a background column; satellite echoes are left in (variant 3, Memo 42)."],
   [/^isr-detected/, "Our inversion with each detected satellite echo modelled as an extra unknown, on the pulses where the detector found it (variant 5, Memo 42)."],
   [/^isr-tracked/, "As variant 5, with pass tracking: detections are linked into passes and every pulse of a pass gets a column, also those the detector missed (Memo 45)."],
-  [/^isr-v2rfi/, "Our final product: pass tracking with a lower detection threshold (false-alarm probability 1e-6, faint detections kept only when tracking links them into a pass; Memo 48), and the lagged products hit by power-line impulses removed from the inversion (Memo 47)."],
+  [/^isr-v2rfi/, "Our final product: pass tracking with a lower detection threshold (false-alarm probability 1e-6, faint detections kept only when tracking links them into a pass; Memo 48), and the lagged products hit by power-line impulses removed from the inversion (Memo 47; Memo 51 finds that this removal lowers Ne by a few per cent where many rows are removed, through the variance weights)."],
 ];
 const about = id => (ABOUT.find(([re]) => re.test(id)) || [null, ''])[1];
 
@@ -80,10 +89,23 @@ async function load(choice) {
   // a native analysis shows its source's raw Ne, not its own: leave it out
   const rawPhysical = !native && m.raw_units === 'm^-3';
   const sorted = a => [...a].sort((x, y) => x - y), median = a => {const b = sorted(a); return b.length ? (b[(b.length - 1) >> 1] + b[b.length >> 1]) / 2 : NaN;};
+  // The gates the analysis itself flags, [r * nt + t]: isr_analysis's
+  // quality flags (FAILED, BOUND, NOISY; manifest quality_flags), or for a
+  // native analysis any fit_status other than "converged". Null when the
+  // analysis carries neither (Historical).
+  let flagged = null;
+  if (m.quality_flags && m.fits.every(f => f.quality_flags)) {
+    const bits = m.quality_flags.bits, hide = m.quality_flags.hide.reduce((x, k) => x | bits[k], 0);
+    flagged = new Uint8Array(nt * nr);
+    m.fits.forEach((f, t) => f.quality_flags.forEach((q, r) => {flagged[r * nt + t] = (q & hide) ? 1 : 0;}));
+  } else if (native && m.fits.every(f => f.fit_status)) {
+    flagged = new Uint8Array(nt * nr);
+    m.fits.forEach((f, t) => f.fit_status.forEach((q, r) => {flagged[r * nt + t] = q === 'converged' ? 0 : 1;}));
+  }
   const windowS = median(m.fits.map(f => f.end_unix_s - f.start_unix_s));
   const gateKm = median(m.range_m.slice(1).map((r, i) => (r - m.range_m[i]) / 1000));
   return {
-    m, label: choice.label, gain, rawPhysical, windowS, gateKm, fitCount: m.fits.length,
+    m, label: choice.label, gain, rawPhysical, windowS, gateKm, fitCount: m.fits.length, flagged, native,
     time: m.fit_times.map(t => t - dayStart), range: m.range_m.map(r => r / 1000),
     intervals: m.fits.map(f => [f.start_unix_s - dayStart, f.end_unix_s - dayStart]),
     maps, raw, rawTime: m.raw_times.map(t => t - dayStart), rawRange: m.raw_range_m.map(r => r / 1000),
@@ -137,12 +159,48 @@ function bindHandle(handle) {
   });
 }
 
+// Dashed vertical lines at the eclipse's contacts on every map, kept in place
+// through pan and zoom by following each map's view on every frame.
+let eclipseFrame = null;
+function eclipseLines(panels, bounds, date) {
+  if (eclipseFrame) cancelAnimationFrame(eclipseFrame);
+  const events = ECLIPSE[date] || [];
+  el('cmp-eclipse').textContent = events.length ? 'Dashed lines: the eclipse at Millstone Hill (ground): ' +
+    events.map(([t, what]) => `${what} ${hhmm(t)}:${String(t % 60).padStart(2, '0')}`).join(', ') + ' UTC.' : '';
+  if (!events.length) return;
+  const sets = panels.map(p => {
+    const box = p.article.querySelector('.ion-raster'), canvas = box.querySelector('canvas');
+    const lines = events.map(() => {
+      const d = document.createElement('div');
+      Object.assign(d.style, {position: 'absolute', width: '0', borderLeft: '1.5px dashed #111', pointerEvents: 'none', zIndex: 3});
+      box.append(d); return d;
+    });
+    return {p, canvas, lines};
+  });
+  const place = () => {
+    for (const {p, canvas, lines} of sets) {
+      const v = p.viewport.bounds(), x0 = bounds[0] + (bounds[1] - bounds[0]) * v[0], x1 = bounds[0] + (bounds[1] - bounds[0]) * v[2];
+      events.forEach(([t], k) => {
+        const f = (t - x0) / (x1 - x0), d = lines[k];
+        d.style.display = f < 0 || f > 1 ? 'none' : '';
+        Object.assign(d.style, {left: canvas.offsetLeft + f * canvas.offsetWidth + 'px', top: canvas.offsetTop + 'px', height: canvas.offsetHeight + 'px'});
+      });
+    }
+    eclipseFrame = requestAnimationFrame(place);
+  };
+  place();
+}
+
+let hideFlagged = false;
+
 async function draw(before, after, bounds) {
   const host = el('cmp-maps');
   host.replaceChildren();
   const panels = [];
   const res = d => `${d.label}: ${d.fitCount} fits, median window ${Math.round(d.windowS)} s, range cells ${d.gateKm.toFixed(1)} km`;
   el('cmp-info-selected').textContent = `Selected now. Before: ${res(before)}. After: ${res(after)}.`;
+  const flagNote = d => (d.flagged ? (d.native ? 'its fit_status other than converged' : 'its quality flags FAILED, BOUND, NOISY') : 'no flags (shown in full)');
+  el('cmp-flag-note').textContent = hideFlagged ? `Flagged gates hidden. Before: ${flagNote(before)}; after: ${flagNote(after)}.` : '';
   el('cmp-left').textContent = 'Before (left): ' + before.label;
   el('cmp-right').textContent = 'After (right): ' + after.label;
   const shown = new Set([...document.querySelectorAll('#cmp-params input:checked')].map(x => Number(x.value)));
@@ -160,7 +218,9 @@ async function draw(before, after, bounds) {
     const limits = spec.p === 0 && !(before.gain && after.gain) ? undefined : EISCAT_LIMITS[spec.p];
     for (const [side, d] of [['a', before], ['b', after]]) {
       const x = raw ? d.rawTime : d.time, nt = x.length;
-      const values = regrid(raw ? d.raw : d.maps[spec.p], nt, raw ? d.rawRange : d.range, y);
+      let src = raw ? d.raw : d.maps[spec.p];
+      if (!raw && hideFlagged && d.flagged) src = src.map((v, k) => (d.flagged[k] ? NaN : v));
+      const values = regrid(src, nt, raw ? d.rawRange : d.range, y);
       panels.push(fieldPanel(`cmp-${side}-${i}`, `cmp-${side}-map-${i}`, spec.name, x, y, values, {
         timeBounds: bounds, intervals: raw ? undefined : d.intervals, mode: spec.mode,
         palette: spec.palette, colormap: spec.colormap, limits, sharedTime: true, sharedTimeLast: i === last,
@@ -168,6 +228,7 @@ async function draw(before, after, bounds) {
     }
     bindHandle(row.querySelector('.swipe-handle'));
   }
+  eclipseLines(panels, bounds, before.m.date);
   // The first map can be drawn before its fonts and labels are ready, and
   // stays blank; draw every map once more after layout.
   await document.fonts?.ready;
@@ -201,8 +262,8 @@ async function main() {
     requestAnimationFrame(applySplit);
   };
   if (query.get('info') === '1') el('cmp-info-btn').onclick();
-  el('cmp-before').value = has(query.get('before')) ? query.get('before') : has('isr-nosat-v1') ? 'isr-nosat-v1' : 'historical';
-  el('cmp-after').value = has(query.get('after')) ? query.get('after') : has('isr-tracked-v1') ? 'isr-tracked-v1' : choices.at(-1).id;
+  el('cmp-before').value = has(query.get('before')) ? query.get('before') : (choices.find(c => c.id.startsWith('isr-nosat')) || {id: 'historical'}).id;
+  el('cmp-after').value = has(query.get('after')) ? query.get('after') : (choices.find(c => c.id.startsWith('isr-v2rfi')) || choices.find(c => c.id.startsWith('isr-tracked')) || choices.at(-1)).id;
   const dayWindow = [Number(query.get('start')) || 11 * 3600, Number(query.get('end')) || 23 * 3600];
   const show = async () => {
     el('cmp-status').textContent = 'Loading…';
@@ -213,6 +274,7 @@ async function main() {
       el('cmp-status').textContent = '';
       const u = new URL(location.href);
       u.searchParams.set('date', date); u.searchParams.set('before', el('cmp-before').value); u.searchParams.set('after', el('cmp-after').value);
+      if (hideFlagged) u.searchParams.set('flags', 'hide'); else u.searchParams.delete('flags');
       history.replaceState(null, '', u);
     } catch (e) {el('cmp-status').textContent = 'Unable to compare: ' + e.message;}
   };
@@ -227,6 +289,9 @@ async function main() {
     l.append(c, ' ' + r.name.split(' /')[0]); el('cmp-params').append(l);
   });
   el('cmp-before').onchange = el('cmp-after').onchange = show;
+  el('cmp-hide-flagged').checked = query.get('flags') === 'hide';
+  hideFlagged = el('cmp-hide-flagged').checked;
+  el('cmp-hide-flagged').onchange = () => {hideFlagged = el('cmp-hide-flagged').checked; show();};
   el('cmp-day').onchange = () => {const u = new URL(location.href); u.searchParams.set('date', el('cmp-day').value); location.assign(u);};
   el('cmp-swap').onclick = () => {const b = el('cmp-before').value; el('cmp-before').value = el('cmp-after').value; el('cmp-after').value = b; show();};
   el('cmp-split').oninput = () => {split = el('cmp-split').value / 1000; applySplit();};

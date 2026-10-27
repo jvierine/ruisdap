@@ -53,6 +53,12 @@ p.add_argument('--plasma-manifest', type=Path, required=True, help="manifest.jso
 p.add_argument('--plasma-url', required=True, help='URL of that export\'s plasma spectrum file')
 p.add_argument('--label', required=True, help='what the run is, for the manifest')
 p.add_argument('--source-commit', default='', help='isr_analysis commit of the run')
+p.add_argument('--isr-analysis', type=Path, default=None,
+               help='an isr_analysis checkout: write each fit\'s quality flags (fit_quality.py) into the manifest')
+p.add_argument('--echo-catalogue', default='/mnt/data/henrik/satellite_detections_2026-10-02',
+               help='catalogue of satellite echoes for the SATELLITE flag (echoes of at least 20 dB)')
+p.add_argument('--echo-rows', type=Path, default=None,
+               help='instead of reading the catalogue: a .npy of its rows (period index, range km, SNR dB)')
 a = p.parse_args()
 
 if a.output.exists():
@@ -142,6 +148,47 @@ base = json.loads(a.plasma_manifest.read_text())
 if base['date'] != a.date or base['antenna'] != a.antenna:
     raise SystemExit('the plasma manifest is for another day or antenna')
 
+quality = None
+if a.isr_analysis is not None:
+    # The quality flags of isr_analysis's fit_quality.py, per fit and gate:
+    # FAILED (a parameter or its error not finite), BOUND (the fit at a limit
+    # of its search), NOISY (dne/ne or dTe/Te above 0.5), and, for
+    # information, SATELLITE (a catalogued echo of at least 20 dB within one
+    # gate during the fit window). The viewer hides the first three on request.
+    import sys
+    sys.path.insert(0, str(a.isr_analysis))
+    import fit_quality as fq
+    from digital_rf import DigitalMetadataReader
+    F = fq.load_fits(str(a.run), (start, end), constant=1.0)
+    p0 = int((min(f['start_unix_s'] for f in fits) - fq.T0_RECORDING) // fq.PERIOD_S)
+    p1 = int((max(f['end_unix_s'] for f in fits) - fq.T0_RECORDING) // fq.PERIOD_S) + 1
+    if a.echo_rows is not None:
+        rows = np.load(a.echo_rows)
+        rows = rows[(rows[:, 0] >= p0) & (rows[:, 0] < p1)]
+    else:
+        rd, rows = DigitalMetadataReader(a.echo_catalogue), []
+        i0 = int((fq.T0_RECORDING + fq.PERIOD_S * p0) * 1e6)
+        for k, rec in rd.read(i0, int((fq.T0_RECORDING + fq.PERIOD_S * p1) * 1e6),
+                              columns=['channel', 'range_km', 'snr_db']).items():
+            ch = rec['channel']
+            if (ch.decode() if isinstance(ch, bytes) else str(ch)) != a.channel:
+                continue
+            ai = (k / 1e6 - fq.T0_RECORDING) // fq.PERIOD_S
+            rows += [(ai, float(r), float(q)) for r, q in zip(rec['range_km'], rec['snr_db'])]
+        rows = np.array(rows) if rows else None
+    flags = fq.flags(F, rows if rows is not None and len(rows) else None)
+    by_t0 = {float(t): i for i, t in enumerate(F['t0'])}
+    for f in fits:
+        f['quality_flags'] = flags[by_t0[f['start_unix_s']]].astype(int)
+    quality = dict(
+        bits=dict(FAILED=int(fq.FAILED), BOUND=int(fq.BOUND), NOISY=int(fq.NOISY), SATELLITE=int(fq.SATELLITE)),
+        hide=['FAILED', 'BOUND', 'NOISY'],
+        definition='isr_analysis fit_quality.py: FAILED, a parameter or its error is not finite; BOUND, the fit '
+                   'ends at a limit of its search (Te/Ti 0.99 or 3, Ti 150 or 3000 K, |vi| 1500 m/s); NOISY, '
+                   'dne/ne or dTe/Te above 0.5; SATELLITE (information only), a catalogued echo of at least 20 dB '
+                   'within one gate during the fit window. A gate is good when it has none of the first three.',
+        source='fit_quality.py of %s; echoes from %s' % (a.isr_analysis, a.echo_rows or a.echo_catalogue))
+
 times = np.array([(f['start_unix_s'] + f['end_unix_s']) / 2 for f in fits])
 parameters = np.array([f['parameters'] for f in fits])
 a.output.mkdir(parents=True)
@@ -166,6 +213,8 @@ manifest = dict(
                      method=a.calibration_method),
     isr_analysis=dict(label=a.label, run=str(a.run), postfix=a.postfix, channel=a.channel,
                       commit=a.source_commit, fit_count=len(fits), raw_count=len(raw)))
+if quality is not None:
+    manifest['quality_flags'] = quality
 (a.output / 'manifest.json').write_text(json.dumps(finite(manifest), allow_nan=False))
 with h5py.File(a.output / 'quicklook.h5', 'w') as h:
     h.attrs['schema'] = manifest['schema']

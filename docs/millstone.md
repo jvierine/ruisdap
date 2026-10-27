@@ -755,3 +755,19 @@ drop the oldest beyond about sixteen. Native (Rust) analyses are compared
 with their absolute Ne as stored; their raw-Ne row is left out, since a native
 analysis shows its source's raw Ne rather than its own.
 Example: `compare.html?date=2024-04-08&before=isr-nosat-v1&after=isr-tracked-v1`.
+
+Quality flags and the eclipse (27 October 2026). With `--isr-analysis
+<checkout>` (and `--echo-rows`, a .npy of the catalogue's echoes, or
+`--echo-catalogue`) the export writes each fit's quality flags as
+isr_analysis's `fit_quality.py` defines them (`fits[].quality_flags`, one
+integer per gate; FAILED 1, BOUND 2, NOISY 4, SATELLITE 8 for information;
+the definition in the manifest's `quality_flags`). The exports with flags
+are the `-v2` folders (parameters identical to `-v1`), and the private copy's
+menu points at them (ids `isr-*-v2`). `compare.html` has a checkbox "Hide
+flagged gates" (off by default; `&flags=hide` in the URL): each side hides
+its own flagged gates, FAILED, BOUND and NOISY for isr_analysis, any
+`fit_status` other than "converged" for native analyses; Historical has no
+flags. On 8 April every map carries dashed lines at the eclipse's first
+contact, maximum and last contact at Millstone Hill (ground: 18:15:50,
+19:29:30 with 94 % obscured, 20:38:50 UTC; isr_analysis `eclipse_timing.py`).
+Example: `compare.html?date=2024-04-08&before=isr-nosat-v2&after=isr-v2rfi-v2&flags=hide`.

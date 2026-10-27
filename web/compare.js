@@ -43,6 +43,7 @@ const ABOUT = [
   [/^native-direct-live/, "Juha's Rust pipeline, reading the raw recordings directly and subtracting every CFAR-detected satellite echo from the voltages. Fitted window by window while it ran; its subtraction is still under Juha's review."],
   [/^native-debris400-.*live/, "The same as the strict Rust run (echoes at least 3 dB above the CFAR threshold, above 400 km), published window by window while it ran; once complete it matches that run."],
   [/^native-debris400/, "Juha's Rust pipeline with a stricter subtraction: only echoes at least 3 dB above the CFAR threshold and above 400 km altitude are subtracted from the voltages."],
+  [/^isr-v2rfi-loo/, "Candidate, for Henrik's decision: the final product with variance weights that leave each row out of its own weight (Memo 51), which removes a 17-25 % low bias of the ACF and the bias of the impulse-row removal. The density constant is not yet recalibrated for it, so its Ne is about 10-15 % high."],
   [/^isr-v2rfi-190s/, "Our final product refitted in one window per zenith cycle (about 190 s), the windows of Juha's analyses, for a comparison at matched times (range cells still differ: 9 km against 4.5 km; Memo 51)."],
   [/^isr-nosat-190s/, "Our inversion without satellite handling (variant 3), refitted in one window per zenith cycle (about 190 s), as Juha's analyses."],
   [/^isr-nosat/, "Our variance-weighted lag profile inversion with a background column; satellite echoes are left in (variant 3, Memo 42)."],

@@ -43,6 +43,8 @@ const ABOUT = [
   [/^native-direct-live/, "Juha's Rust pipeline, reading the raw recordings directly and subtracting every CFAR-detected satellite echo from the voltages. Fitted window by window while it ran; its subtraction is still under Juha's review."],
   [/^native-debris400-.*live/, "The same as the strict Rust run (echoes at least 3 dB above the CFAR threshold, above 400 km), published window by window while it ran; once complete it matches that run."],
   [/^native-debris400/, "Juha's Rust pipeline with a stricter subtraction: only echoes at least 3 dB above the CFAR threshold and above 400 km altitude are subtracted from the voltages."],
+  [/^isr-v2rfi-190s/, "Our final product refitted in one window per zenith cycle (about 190 s), the windows of Juha's analyses, for a comparison at matched times (range cells still differ: 9 km against 4.5 km; Memo 51)."],
+  [/^isr-nosat-190s/, "Our inversion without satellite handling (variant 3), refitted in one window per zenith cycle (about 190 s), as Juha's analyses."],
   [/^isr-nosat/, "Our variance-weighted lag profile inversion with a background column; satellite echoes are left in (variant 3, Memo 42)."],
   [/^isr-detected/, "Our inversion with each detected satellite echo modelled as an extra unknown, on the pulses where the detector found it (variant 5, Memo 42)."],
   [/^isr-tracked/, "As variant 5, with pass tracking: detections are linked into passes and every pulse of a pass gets a column, also those the detector missed (Memo 45)."],

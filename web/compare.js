@@ -1,9 +1,10 @@
-// Before/after comparison of two Millstone analyses of one day.
-// Each parameter map is drawn twice, from the "before" and the "after"
-// analysis, on the same time and range axes and the same colour limits. The
-// "after" map lies on top and is clipped left of a vertical bar, so the left
-// part shows "before" and the right part "after". Dragging the bar moves the
-// split on every map; pan and zoom stay shared through the dataset time group.
+// Comparison of Millstone analyses of one day, one parameter per row.
+// Each row shows the dataset chosen for it. With the row's "Compare" toggle
+// on, it also draws a second dataset on the same time and range axes and the
+// same colour limits: the second map lies on top and is clipped left of a
+// vertical bar, so the left part shows the first dataset and the right part
+// the second. Dragging a bar moves the split on every compared row; pan and
+// zoom stay shared through the dataset time group.
 // Only display happens here: no measurement is changed, and where the two
 // analyses use different range gates, both are shown on the finer grid with
 // each cell taking the value of the gate it lies in (no interpolation).
@@ -26,6 +27,8 @@ const ROWS = [
   {name: 'Velocity / m s⁻¹', p: 3, mode: 0, palette: 0, colormap: 'seismic'},
   {name: 'Raw Ne / m⁻³', p: 4, mode: 1, palette: 1, colormap: 'plasma'},
 ];
+// each row's key in the URL
+const KEYS = ['ne', 'te', 'ti', 'vi', 'rawne'];
 
 // The eclipse of 8 April 2024 at Millstone Hill, at the ground (isr_analysis
 // eclipse_timing.py, astropy; 94 % of the Sun's disk covered at maximum),
@@ -38,6 +41,7 @@ const hhmm = s => `${String(Math.floor(s / 3600)).padStart(2, '0')}:${String(Mat
 
 // One to three sentences per dataset, by analysis id (the info panel).
 const ABOUT = [
+  [/^madrigal/, "Madrigal analysed fits from Millstone Hill's own processing, as Juha imported them: their original times (mostly 3 min windows, with some 10 s records) and slant-range cells (18 km in mode 115, 4.5 km in mode 97), no new fit. Calibration preliminary (final calibration pending). Velocity positive away from the radar; the sign of isr_analysis's velocity is not independently verified."],
   [/^historical$/, "Products of the older Python pipeline (30 µs gates), imported by Juha and calibrated with the plasma lines. No satellite removal."],
   [/^native-(full-)?20261019$/, "An early test of Juha's Rust pipeline on a sample of pulses only (16 lags, 200–540 km). Incomplete; not for comparisons."],
   [/^native-direct-live/, "Juha's Rust pipeline, reading the raw recordings directly and subtracting every CFAR-detected satellite echo from the voltages. Fitted window by window while it ran; its subtraction is still under Juha's review."],
@@ -69,6 +73,7 @@ function calibratedDensity(m, proxy, te, ti) {
 async function load(choice) {
   const root = choice.data_root.endsWith('/') ? choice.data_root : choice.data_root + '/';
   const m = await json(root + 'manifest.json');
+  if (m.schema === 'ruisdap-millstone-comparison-v1') return loadMadrigal(choice, root, m);
   // Native (Rust) analyses store absolute Ne in their parameters and point
   // their raw Ne and plasma panels at the source export by an absolute URL.
   const native = m.analysis_kind === 'native';
@@ -108,10 +113,31 @@ async function load(choice) {
   const windowS = median(m.fits.map(f => f.end_unix_s - f.start_unix_s));
   const gateKm = median(m.range_m.slice(1).map((r, i) => (r - m.range_m[i]) / 1000));
   return {
-    m, label: choice.label, gain, rawPhysical, windowS, gateKm, fitCount: m.fits.length, flagged, native,
+    m, label: choice.label, gain, absolute: !!gain, rawPhysical, windowS, gateKm, fitCount: m.fits.length, flagged, native,
     time: m.fit_times.map(t => t - dayStart), range: m.range_m.map(r => r / 1000),
     intervals: m.fits.map(f => [f.start_unix_s - dayStart, f.end_unix_s - dayStart]),
     maps, raw, rawTime: m.raw_times.map(t => t - dayStart), rawRange: m.raw_range_m.map(r => r / 1000),
+  };
+}
+
+// Madrigal's analysed fits as imported for comparison: absolute Ne, Ti, Te
+// and velocity on Madrigal's own times and slant-range cells, [p][r][t]; no
+// raw Ne and no quality flags.
+async function loadMadrigal(choice, root, m) {
+  const dayStart = Date.parse(m.date + 'T00:00:00Z') / 1000;
+  const nt = m.time_unix_s.length, nr = m.range_m.length;
+  const params = await floats(root + m.parameters_url);
+  const maps = [];
+  for (let p = 0; p < 4; p++) maps.push(params.subarray(p * nt * nr, (p + 1) * nt * nr));
+  const sorted = a => [...a].sort((x, y) => x - y), median = a => {const b = sorted(a); return b.length ? (b[(b.length - 1) >> 1] + b[b.length >> 1]) / 2 : NaN;};
+  return {
+    m: {...m, date: m.date}, label: choice.label, gain: null, absolute: true, rawPhysical: false,
+    windowS: median(m.intervals.map(([a, b]) => b - a)),
+    gateKm: median(m.range_m.slice(1).map((r, i) => (r - m.range_m[i]) / 1000)),
+    fitCount: nt, flagged: null, native: false,
+    time: m.time_unix_s.map(t => t - dayStart), range: m.range_m.map(r => r / 1000),
+    intervals: m.intervals.map(([a, b]) => [a - dayStart, b - dayStart]),
+    maps, raw: null, rawTime: [], rawRange: [],
   };
 }
 
@@ -134,7 +160,7 @@ const finer = (a, b) => (a.length >= b.length ? a : b);
 let split = 0.5;
 
 function applySplit() {
-  for (const row of document.querySelectorAll('.swipe-row')) {
+  for (const row of document.querySelectorAll('.swipe-row.compared')) {
     const canvas = row.querySelector('.swipe-after canvas');
     if (!canvas) continue;
     const box = row.getBoundingClientRect(), c = canvas.getBoundingClientRect();
@@ -196,42 +222,73 @@ function eclipseLines(panels, bounds, date) {
 
 let hideFlagged = false;
 
-async function draw(before, after, bounds) {
+// One row per shown parameter: rows[i] = {a, b, compare} (dataset ids), and
+// data maps an id to its loaded analysis. Each render uses fresh element
+// ids, so no map reuses a canvas of an earlier render.
+let renders = 0;
+async function draw(rows, data, choices, bounds, onRowChange) {
   const host = el('cmp-maps');
   host.replaceChildren();
-  const panels = [];
+  const gen = ++renders, panels = [];
   const res = d => `${d.label}: ${d.fitCount} fits, median window ${Math.round(d.windowS)} s, range cells ${d.gateKm.toFixed(1)} km`;
-  el('cmp-info-selected').textContent = `Selected now. Before: ${res(before)}. After: ${res(after)}.`;
-  const flagNote = d => (d.flagged ? (d.native ? 'its fit_status other than converged' : 'its quality flags FAILED, BOUND, NOISY') : 'no flags (shown in full)');
-  el('cmp-flag-note').textContent = hideFlagged ? `Flagged gates hidden. Before: ${flagNote(before)}; after: ${flagNote(after)}.` : '';
-  el('cmp-left').textContent = 'Before (left): ' + before.label;
-  el('cmp-right').textContent = 'After (right): ' + after.label;
   const shown = new Set([...document.querySelectorAll('#cmp-params input:checked')].map(x => Number(x.value)));
+  const used = [...new Set([...shown].flatMap(i => (rows[i].compare ? [rows[i].a, rows[i].b] : [rows[i].a])))];
+  el('cmp-info-selected').textContent = 'Shown now. ' + used.map(id => res(data.get(id))).join('. ') + '.';
+  const flagNote = d => (d.flagged ? (d.native ? 'its fit_status other than converged' : 'its quality flags FAILED, BOUND, NOISY') : 'no flags (shown in full)');
+  el('cmp-flag-note').textContent = hideFlagged ? 'Flagged gates hidden, each dataset by its own test: ' +
+    used.map(id => `${data.get(id).label}: ${flagNote(data.get(id))}`).join('; ') + '.' : '';
   const last = Math.max(...shown);
+  const select = (value, title) => {
+    const s = document.createElement('select'); s.title = title;
+    for (const c of choices) {const o = document.createElement('option'); o.value = c.id; o.textContent = c.label; s.append(o);}
+    s.value = value; return s;
+  };
   for (const [i, spec] of ROWS.entries()) {
     if (!shown.has(i)) continue;
+    const st = rows[i], A = data.get(st.a), B = st.compare ? data.get(st.b) : null;
     const raw = spec.p === 4;
-    if (raw && !(before.rawPhysical && after.rawPhysical)) continue;
-    const yA = raw ? before.rawRange : before.range, yB = raw ? after.rawRange : after.range;
-    const y = finer(yA, yB);
+    // the row's own controls: its dataset, the Compare toggle, the second dataset
+    const bar = document.createElement('div');
+    bar.className = 'cmp-rowbar';
+    const name = document.createElement('span'); name.className = 'cmp-rowname'; name.textContent = spec.name.split(' /')[0];
+    const first = select(st.a, B ? 'Left of the bar' : 'The dataset of this row');
+    const toggle = document.createElement('button');
+    toggle.className = 'cmp-toggle'; toggle.textContent = '⇔ Compare'; toggle.setAttribute('aria-pressed', String(st.compare));
+    toggle.title = st.compare ? 'Show one dataset only' : 'Compare with a second dataset, split by a bar';
+    bar.append(name, first, toggle);
+    let second = null;
+    if (st.compare) {second = select(st.b, 'Right of the bar'); bar.append(second);}
+    first.onchange = () => onRowChange(i, {a: first.value});
+    second && (second.onchange = () => onRowChange(i, {b: second.value}));
+    toggle.onclick = () => onRowChange(i, {compare: !st.compare});
+    host.append(bar);
+    const sides = B ? [['a', A], ['b', B]] : [['a', A]];
+    const missing = raw ? sides.filter(([, d]) => !d.rawPhysical).map(([, d]) => d.label) : [];
+    if (missing.length) {
+      const note = document.createElement('p'); note.className = 'caption cmp-rownote';
+      note.textContent = `No raw Ne of its own for ${missing.join(' and ')}.`;
+      host.append(note); continue;
+    }
+    const yA = raw ? A.rawRange : A.range, y = B ? finer(yA, raw ? B.rawRange : B.range) : yA;
     const row = document.createElement('div');
-    row.className = 'swipe-row';
-    row.innerHTML = `<div class="swipe-layer swipe-before" id="cmp-a-${i}"></div><div class="swipe-layer swipe-after" id="cmp-b-${i}"></div><div class="swipe-handle" title="Drag to move the split"><span></span></div>`;
+    row.className = 'swipe-row' + (B ? ' compared' : '');
+    row.innerHTML = `<div class="swipe-layer swipe-before" id="cmp-${gen}-a-${i}"></div>` +
+      (B ? `<div class="swipe-layer swipe-after" id="cmp-${gen}-b-${i}"></div><div class="swipe-handle" title="Drag to move the split"><span></span></div>` : '');
     host.append(row);
-    const limits = spec.p === 0 && !(before.gain && after.gain) ? undefined : EISCAT_LIMITS[spec.p];
-    for (const [side, d] of [['a', before], ['b', after]]) {
+    const limits = spec.p === 0 && !sides.every(([, d]) => d.absolute) ? undefined : EISCAT_LIMITS[spec.p];
+    for (const [side, d] of sides) {
       const x = raw ? d.rawTime : d.time, nt = x.length;
       let src = raw ? d.raw : d.maps[spec.p];
       if (!raw && hideFlagged && d.flagged) src = src.map((v, k) => (d.flagged[k] ? NaN : v));
       const values = regrid(src, nt, raw ? d.rawRange : d.range, y);
-      panels.push(fieldPanel(`cmp-${side}-${i}`, `cmp-${side}-map-${i}`, spec.name, x, y, values, {
+      panels.push(fieldPanel(`cmp-${gen}-${side}-${i}`, `cmp-${gen}-${side}-map-${i}`, spec.name, x, y, values, {
         timeBounds: bounds, intervals: raw ? undefined : d.intervals, mode: spec.mode,
         palette: spec.palette, colormap: spec.colormap, limits, sharedTime: true, sharedTimeLast: i === last,
         ylabel: 'Slant range / km'}));
     }
-    bindHandle(row.querySelector('.swipe-handle'));
+    if (B) bindHandle(row.querySelector('.swipe-handle'));
   }
-  eclipseLines(panels, bounds, before.m.date);
+  eclipseLines(panels, bounds, el('cmp-day').value);
   // The first map can be drawn before its fonts and labels are ready, and
   // stays blank; draw every map once more after layout.
   await document.fonts?.ready;
@@ -265,18 +322,32 @@ async function main() {
     requestAnimationFrame(applySplit);
   };
   if (query.get('info') === '1') el('cmp-info-btn').onclick();
-  el('cmp-before').value = has(query.get('before')) ? query.get('before') : (choices.find(c => c.id.startsWith('isr-nosat')) || {id: 'historical'}).id;
-  el('cmp-after').value = has(query.get('after')) ? query.get('after') : (choices.find(c => c.id.startsWith('isr-v2rfi')) || choices.find(c => c.id.startsWith('isr-tracked')) || choices.at(-1)).id;
+  // the "All rows" defaults, then each row's own state from the URL:
+  // ne=<id> shows one dataset, ne=<id>~<id> compares two (keys as KEYS)
+  const defBefore = has(query.get('before')) ? query.get('before') : (choices.find(c => c.id.startsWith('isr-nosat')) || {id: 'historical'}).id;
+  const defAfter = has(query.get('after')) ? query.get('after') : (choices.find(c => c.id.startsWith('isr-v2rfi')) || choices.find(c => c.id.startsWith('isr-tracked')) || choices.at(-1)).id;
+  const defCompare = query.get('compare') !== 'off';
+  el('cmp-before').value = defBefore; el('cmp-after').value = defAfter;
+  const rows = ROWS.map((r, i) => {
+    const [a, b] = (query.get(KEYS[i]) || '').split('~');
+    if (has(a)) return {a, b: has(b) ? b : defAfter, compare: has(b)};
+    return {a: defBefore, b: defAfter, compare: defCompare};
+  });
+  const data = new Map();
   const dayWindow = [Number(query.get('start')) || 11 * 3600, Number(query.get('end')) || 23 * 3600];
   const show = async () => {
     el('cmp-status').textContent = 'Loading…';
-    const pick = id => choices.find(c => c.id === el(id).value);
     try {
-      const [b, a] = await Promise.all([load(pick('cmp-before')), load(pick('cmp-after'))]);
-      await draw(b, a, dayWindow);
+      const shownRows = [...document.querySelectorAll('#cmp-params input:checked')].map(x => rows[Number(x.value)]);
+      const need = [...new Set(shownRows.flatMap(r => (r.compare ? [r.a, r.b] : [r.a])))].filter(id => !data.has(id));
+      const got = await Promise.all(need.map(id => load(choices.find(c => c.id === id))));
+      need.forEach((id, k) => data.set(id, got[k]));
+      await draw(rows, data, choices, dayWindow, (i, change) => {Object.assign(rows[i], change); show();});
       el('cmp-status').textContent = '';
       const u = new URL(location.href);
-      u.searchParams.set('date', date); u.searchParams.set('before', el('cmp-before').value); u.searchParams.set('after', el('cmp-after').value);
+      for (const k of ['before', 'after', 'compare', ...KEYS]) u.searchParams.delete(k);
+      u.searchParams.set('date', date);
+      rows.forEach((r, i) => u.searchParams.set(KEYS[i], r.compare ? r.a + '~' + r.b : r.a));
       if (hideFlagged) u.searchParams.set('flags', 'hide'); else u.searchParams.delete('flags');
       history.replaceState(null, '', u);
     } catch (e) {el('cmp-status').textContent = 'Unable to compare: ' + e.message;}
@@ -291,12 +362,17 @@ async function main() {
     };
     l.append(c, ' ' + r.name.split(' /')[0]); el('cmp-params').append(l);
   });
-  el('cmp-before').onchange = el('cmp-after').onchange = show;
+  // "All rows": set every row's first or second dataset at once
+  el('cmp-before').onchange = () => {rows.forEach(r => {r.a = el('cmp-before').value;}); show();};
+  el('cmp-after').onchange = () => {rows.forEach(r => {r.b = el('cmp-after').value;}); show();};
+  el('cmp-swap').onclick = () => {
+    const b = el('cmp-before').value; el('cmp-before').value = el('cmp-after').value; el('cmp-after').value = b;
+    rows.forEach(r => {[r.a, r.b] = [r.b, r.a];}); show();
+  };
   el('cmp-hide-flagged').checked = query.get('flags') === 'hide';
   hideFlagged = el('cmp-hide-flagged').checked;
   el('cmp-hide-flagged').onchange = () => {hideFlagged = el('cmp-hide-flagged').checked; show();};
   el('cmp-day').onchange = () => {const u = new URL(location.href); u.searchParams.set('date', el('cmp-day').value); location.assign(u);};
-  el('cmp-swap').onclick = () => {const b = el('cmp-before').value; el('cmp-before').value = el('cmp-after').value; el('cmp-after').value = b; show();};
   el('cmp-split').oninput = () => {split = el('cmp-split').value / 1000; applySplit();};
   window.addEventListener('resize', () => requestAnimationFrame(applySplit));
   await show();

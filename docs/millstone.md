@@ -771,3 +771,18 @@ flags. On 8 April every map carries dashed lines at the eclipse's first
 contact, maximum and last contact at Millstone Hill (ground: 18:15:50,
 19:29:30 with 94 % obscured, 20:38:50 UTC; isr_analysis `eclipse_timing.py`).
 Example: `compare.html?date=2024-04-08&before=isr-nosat-v2&after=isr-v2rfi-v2&flags=hide`.
+
+Rows of their own and Madrigal (Henrik, 28 October 2026). `compare.html` now
+gives each parameter row its own dataset; a "⇔ Compare" toggle on the row
+adds a second dataset, split by the bar as before (the bars of all compared
+rows move together). The "All rows" menus set the first and second dataset of
+every row at once. In the URL each row is `ne`, `te`, `ti`, `vi` or `rawne`:
+`ne=<id>` shows one dataset, `ne=<id>~<id>` compares two; `before`, `after`
+and `compare=off` still set every row. Madrigal's analysed fits, as Juha
+imported them (`ruisdap-millstone-comparison-v1`, absolute Ne, velocity
+positive away from the radar, preliminary calibration), load as datasets of
+their own; the private copy lists the 8 April ZENITH imports as
+`madrigal-115-480` and `madrigal-97-480`. The sign of isr_analysis's velocity
+is not independently verified, so velocity differences against Madrigal may
+include a sign convention.
+Example: `compare.html?date=2024-04-08&ne=madrigal-115-480~isr-v2rfi-v2&te=isr-v2rfi-v2`.

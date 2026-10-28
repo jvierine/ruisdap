@@ -2,7 +2,12 @@
 .cmp-controls{display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:10px 0}
 .cmp-controls label{display:flex;gap:6px;align-items:center}
 .cmp-controls select{max-width:420px}
-.cmp-legend{display:flex;justify-content:space-between;margin:6px 76px 0 76px;font:16px RustplotlibPagella,Palatino,serif;color:#314858}
+.cmp-rowbar{display:flex;gap:8px;align-items:center;margin:14px 0 4px 76px;font-size:14px}
+.cmp-rowbar select{max-width:340px;font-size:13px}
+.cmp-rowname{font:18px RustplotlibPagella,Palatino,serif;color:#314858;min-width:84px}
+.cmp-toggle{border:1px solid #c9d6de;border-radius:13px;background:#fff;color:#314858;padding:2px 10px;font-size:13px;cursor:pointer}
+.cmp-toggle[aria-pressed=true]{background:#d6336c;border-color:#d6336c;color:#fff}
+.cmp-rownote{margin:2px 0 8px 76px}
 .swipe-row{position:relative;display:grid}
 .swipe-row>.swipe-layer{grid-area:1/1;position:relative;isolation:isolate}
 .swipe-before{z-index:0}
@@ -19,20 +24,19 @@
 .swipe-handle::after{content:'⇔';position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:#d6336c;color:#fff;border-radius:10px;padding:1px 5px;font-size:13px}
 </style></head><body><header class="site-header"><a class="brand" href="index.html">RUISDAP</a><nav><a href="millstone.html">Millstone viewer</a></nav></header><main>
 <h1>Before and after mitigation</h1>
-<p class="caption">Two analyses of the same day on the same axes and colour limits. Left of the bar: before; right: after. Drag the bar (or use the slider) to move the split; drag a map to pan, Ctrl/Cmd-wheel to zoom, right-click to reset. Where the analyses have different range gates, both are shown on the finer grid, each cell taking the value of the gate it lies in.</p>
-<div class="cmp-controls"><label>Day <select id="cmp-day"></select></label><label>Before <select id="cmp-before"></select></label><button id="cmp-swap" title="Swap before and after">⇄</button><label>After <select id="cmp-after"></select></label><label>Split <input id="cmp-split" type="range" min="0" max="1000" value="500"></label><button id="cmp-info-btn" class="cmp-info-btn" aria-expanded="false" aria-controls="cmp-info" title="About the datasets and their resolution">i</button></div>
+<p class="caption">Analyses of the same day on the same axes and colour limits, one parameter per row. Each row shows the dataset chosen for it; switch on <b>⇔ Compare</b> on a row to add a second dataset: left of the bar the first, right of it the second. Drag a bar (or use the slider) to move the split on every compared row; drag a map to pan, Ctrl/Cmd-wheel to zoom, right-click to reset. Where two datasets have different range gates, both are shown on the finer grid, each cell taking the value of the gate it lies in.</p>
+<div class="cmp-controls"><label>Day <select id="cmp-day"></select></label><span title="Set the datasets of every row at once">All rows:</span><label><select id="cmp-before" aria-label="First dataset of every row"></select></label><button id="cmp-swap" title="Swap the two datasets on every row">⇄</button><label><select id="cmp-after" aria-label="Second dataset of every compared row"></select></label><label>Split <input id="cmp-split" type="range" min="0" max="1000" value="500"></label><button id="cmp-info-btn" class="cmp-info-btn" aria-expanded="false" aria-controls="cmp-info" title="About the datasets and their resolution">i</button></div>
 <div class="cmp-controls" id="cmp-params"><span>Show (at most 4):</span></div>
 <div class="cmp-controls"><label title="Hide the gates each analysis flags itself: isr_analysis's FAILED, BOUND and NOISY; a native analysis's fit_status other than converged. Each side hides only its own flags."><input type="checkbox" id="cmp-hide-flagged"> Hide flagged gates</label><span id="cmp-flag-note"></span></div>
 <div id="cmp-info" class="cmp-info" hidden>
 <h2>The datasets of this day</h2><dl id="cmp-info-list"></dl>
 <h2>Why the resolution looks different</h2>
-<p>Juha's Rust analyses and Historical fit one window per zenith antenna cycle, about 190 s, on 4.5 km range cells (240 cells, matching the 30 µs code bauds), averaged over 6 cells (about 27 km) at 300–700 km before the fit. The isr_analysis runs fit 60 s windows, about three per zenith cycle (219 fits on 8 April 11–23 UTC against 145 for the whole day), on 9 km gates (116 gates of 60 µs), averaged over 7 gates (about 63 km) at 300–700 km. So the Rust maps have columns about three times wider and finer range structure, and their longer windows make the topside less noisy; differences between the two sides mix the satellite method with this averaging.</p>
+<p>Juha's Rust analyses and Historical fit one window per zenith antenna cycle, about 190 s, on 4.5 km range cells (240 cells, matching the 30 µs code bauds), averaged over 6 cells (about 27 km) at 300–700 km before the fit. The isr_analysis runs fit 60 s windows, about three per zenith cycle (219 fits on 8 April 11–23 UTC against 145 for the whole day), on 9 km gates (116 gates of 60 µs), averaged over 7 gates (about 63 km) at 300–700 km. So the Rust maps have columns about three times wider and finer range structure, and their longer windows make the topside less noisy; differences between the two sides mix the satellite method with this averaging. Madrigal's analysed fits keep their own resolution: mostly 3 min windows (with some 10 s records), 18 km cells in mode 115 and 4.5 km in mode 97.</p>
 <h2>Quality flags</h2>
 <p>“Hide flagged gates” blanks the gates each analysis marks as unreliable, each side by its own test: for the isr_analysis runs the fit_quality.py flags FAILED (a parameter or its error is not finite), BOUND (the fit ends at a limit of its search) and NOISY (relative error of Ne or Te above 0.5); for Juha's native runs any fit_status other than “converged” (in those runs most gates end at a parameter boundary, so much is hidden); Historical carries no flags and is shown in full.</p>
 <p id="cmp-info-selected"></p>
 </div>
 <p id="cmp-status" role="status">Loading…</p>
-<div class="cmp-legend"><span id="cmp-left"></span><span id="cmp-right"></span></div>
 <p class="caption" id="cmp-eclipse"></p>
 <div id="cmp-maps" class="parameter-stack"></div>
 </main><script type="module" src="compare.js"></script></body></html>

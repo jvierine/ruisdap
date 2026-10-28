@@ -786,3 +786,10 @@ their own; the private copy lists the 8 April ZENITH imports as
 is not independently verified, so velocity differences against Madrigal may
 include a sign convention.
 Example: `compare.html?date=2024-04-08&ne=madrigal-115-480~isr-v2rfi-v2&te=isr-v2rfi-v2`.
+
+Published (Henrik, 28 October 2026). The `-v2` exports of `isr-nosat`,
+`isr-detected`, `isr-tracked` and `isr-v2rfi` for 7 and 8 April ZENITH are in
+`/srv/guisdap/data/` and registered as analyses in
+`catalog/millstone-config.json`; `compare.html` and `compare.js` are on the
+public site (`/guisdap/compare.html`). There the Madrigal imports come from
+the dataset's `comparisons`, which the page lists after the analyses.

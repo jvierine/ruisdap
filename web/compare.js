@@ -306,7 +306,9 @@ async function main() {
   if (!d) throw Error(`No ${antenna} dataset for ${date}`);
   for (const x of days) {const o = document.createElement('option'); o.value = o.textContent = x.date; el('cmp-day').append(o);}
   el('cmp-day').value = date;
-  const choices = [{id: 'historical', label: 'Historical', data_root: d.data_root}, ...(d.analyses || [])];
+  // the day's analyses, then its registered comparisons (Madrigal), each id once
+  const choices = [{id: 'historical', label: 'Historical', data_root: d.data_root}];
+  for (const c of [...(d.analyses || []), ...(d.comparisons || [])]) if (!choices.some(x => x.id === c.id)) choices.push(c);
   for (const id of ['cmp-before', 'cmp-after']) for (const c of choices) {
     const o = document.createElement('option'); o.value = c.id; o.textContent = c.label; el(id).append(o);
   }

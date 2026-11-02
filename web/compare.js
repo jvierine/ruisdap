@@ -41,7 +41,12 @@ const hhmm = s => `${String(Math.floor(s / 3600)).padStart(2, '0')}:${String(Mat
 
 // One to three sentences per dataset, by analysis id (the info panel).
 const ABOUT = [
-  [/^madrigal/, "Madrigal analysed fits from Millstone Hill's own processing, as Juha imported them: their original times (mostly 3 min windows, with some 10 s records) and slant-range cells (18 km in mode 115, 4.5 km in mode 97), no new fit. Calibration preliminary (final calibration pending). Velocity positive away from the radar; the sign of isr_analysis's velocity is not independently verified."],
+  [/^madrigal-final/, "Madrigal analysed fits from Millstone Hill's own processing, the Final revision (.003 files), imported as Juha did: their original times and slant-range cells, no new fit. Its density is the Preliminary revision's times 0.797 at every time and range, which puts it about 20 % below the plasma lines and the digisonde (isr_analysis Memo 54). Velocity positive away from the radar."],
+  [/^madrigal-prelim/, "Madrigal analysed fits, the Preliminary revision (.001, final calibration pending), as Juha imported it: within 2-3 % of the plasma lines and the digisonde in peak density (isr_analysis Memo 54). Velocity positive away from the radar."],
+  [/^isr-v3-loo100c20-nomit/, "The final product WITHOUT mitigation: the same inversion, weights, fit and density constants, with the satellite columns and the impulse-row removal switched off, so the difference from the final product is exactly the mitigation (isr_analysis Memo 52)."],
+  [/^isr-v3-loo100c20-60s/, "Our final product (product v3, 2 November 2026) in 60 s fits, for the eclipse: as the final product, with the time resolution of the eclipse analysis (isr_analysis Memos 52, 54)."],
+  [/^isr-v3-loo100c20/, "Our final product (product v3, 2 November 2026): pass tracking with the lower detection threshold and impulse-hit rows removed (Memos 47, 48), unbiased variance weights (each row's variance from the 100 neighbouring pulses, at least 1/20 of its own power), one fit per zenith cycle with 27-63 km range windows and a table to Te/Ti 5 (Memo 54). Ne on the plasma-line constant of each day, within 2 % of the plasma lines and the digisonde."],
+  [/^madrigal/,"Madrigal analysed fits from Millstone Hill's own processing, as Juha imported them: their original times (mostly 3 min windows, with some 10 s records) and slant-range cells (18 km in mode 115, 4.5 km in mode 97), no new fit. Calibration preliminary (final calibration pending). Velocity positive away from the radar; the sign of isr_analysis's velocity is not independently verified."],
   [/^historical$/, "Products of the older Python pipeline (30 µs gates), imported by Juha and calibrated with the plasma lines. No satellite removal."],
   [/^native-(full-)?20261019$/, "An early test of Juha's Rust pipeline on a sample of pulses only (16 lags, 200–540 km). Incomplete; not for comparisons."],
   [/^native-direct-live/, "Juha's Rust pipeline, reading the raw recordings directly and subtracting every CFAR-detected satellite echo from the voltages. Fitted window by window while it ran; its subtraction is still under Juha's review."],
@@ -326,8 +331,10 @@ async function main() {
   if (query.get('info') === '1') el('cmp-info-btn').onclick();
   // the "All rows" defaults, then each row's own state from the URL:
   // ne=<id> shows one dataset, ne=<id>~<id> compares two (keys as KEYS)
-  const defBefore = has(query.get('before')) ? query.get('before') : (choices.find(c => c.id.startsWith('isr-nosat')) || {id: 'historical'}).id;
-  const defAfter = has(query.get('after')) ? query.get('after') : (choices.find(c => c.id.startsWith('isr-v2rfi')) || choices.find(c => c.id.startsWith('isr-tracked')) || choices.at(-1)).id;
+  // the final product and its run without mitigation where they exist, else the older ones
+  const first = (...pre) => pre.map(p => choices.find(c => c.id.startsWith(p))).find(Boolean);
+  const defBefore = has(query.get('before')) ? query.get('before') : (first('isr-v3-loo100c20-nomit-v', 'isr-nosat') || {id: 'historical'}).id;
+  const defAfter = has(query.get('after')) ? query.get('after') : (first('isr-v3-loo100c20-v', 'isr-v2rfi', 'isr-tracked') || choices.at(-1)).id;
   const defCompare = query.get('compare') !== 'off';
   el('cmp-before').value = defBefore; el('cmp-after').value = defAfter;
   const rows = ROWS.map((r, i) => {

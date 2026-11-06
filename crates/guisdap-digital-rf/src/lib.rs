@@ -633,3 +633,5 @@ impl Reader {
         Ok(first.zip(last))
     }
 }
+
+pub mod legacy;

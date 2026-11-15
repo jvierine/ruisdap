@@ -38,11 +38,16 @@ function draw() {
     cells = nt * nr;
   fields = [];
   for (let k = 0; k < parameters.length; k++) {
+    if (k === 0 && !manifest.density_calibrated) continue;
     const [title, limits, mode, colormap] = parameters[k],
       values = data.slice(k * cells, (k + 1) * cells);
-    if ($("reject").checked && k !== 6)
+    if (k !== 6)
       for (let j = 0; j < cells; j++)
-        if (data[7 * cells + j] !== 0) values[j] = NaN;
+        if (
+          data[7 * cells + j] >= 2 ||
+          ($("reject").checked && data[7 * cells + j] !== 0)
+        )
+          values[j] = NaN;
     let f;
     f = fieldPanel(
       "maps",
@@ -102,13 +107,16 @@ async function pick(time, height) {
   b.altitude_km.forEach((h, i) => {
     if (Math.abs(h - height) < Math.abs(b.altitude_km[ri] - height)) ri = i;
   });
-  const at = (p) => data[p * cells + ri * nt + ti],
+  const at = (p) =>
+      p > 0 && p < 6 && data[7 * cells + ri * nt + ti] === 3
+        ? NaN
+        : data[p * cells + ri * nt + ti],
     fmt = (v) => (Number.isFinite(v) ? v.toFixed(2) : "unavailable");
   fields.forEach((f) =>
     f.setCursor(b.time_unix_s[ti] - origin, b.altitude_km[ri]),
   );
   $("selection").textContent =
-    `${new Date((b.time_unix_s[ti] - 900) * 1000).toISOString().slice(0, 16)}–${new Date((b.time_unix_s[ti] + 900) * 1000).toISOString().slice(11, 16)} UTC · ${b.altitude_km[ri].toFixed(1)} km altitude · Ti ${fmt(at(1))} K · Te ${fmt(at(2))} K · spectral velocity ${fmt(at(3))} m/s · H⁺ ${fmt(at(4))} · He⁺ ${fmt(at(5))} · Ne unavailable · ${at(7) === 0 ? "accepted conditional diagnostic" : at(7) === 1 ? "flagged / prescribed" : "unavailable"}`;
+    `${new Date((b.time_unix_s[ti] - 900) * 1000).toISOString().slice(0, 16)}–${new Date((b.time_unix_s[ti] + 900) * 1000).toISOString().slice(11, 16)} UTC · ${b.altitude_km[ri].toFixed(1)} km altitude · Ti ${fmt(at(1))} K · Te ${fmt(at(2))} K · spectral velocity ${fmt(at(3))} m/s · H⁺ ${fmt(at(4))} · He⁺ ${fmt(at(5))} · Ne unavailable · ${at(7) === 0 ? "accepted conditional diagnostic" : at(7) === 1 ? "flagged" : at(7) === 3 ? "only power fitted; shape prescribed" : "unavailable"}`;
   if (at(7) === 2) {
     $("quality").textContent =
       "No supported fitted parameter at this altitude/time.";

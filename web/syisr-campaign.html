@@ -1,1 +1,142 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>RUISDAP · Full SYISR LP experiment</title><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="light.css"><style>main{max-width:1700px;margin:auto;padding:20px}.controls{position:sticky;top:0;background:white;z-index:20;display:flex;gap:20px;align-items:center;flex-wrap:wrap;padding:10px}.ion-raster{height:220px}.parameter-row{margin:0}.scientific-map h3{display:none}#selection{height:4em;overflow:auto;font-variant-numeric:tabular-nums}.notice{border-left:3px solid #ae8c40;padding:12px;background:#faf7ef}select,button{font:inherit}#diagnostics{min-height:240px}.acf-grid{display:grid;grid-template-columns:1fr 1fr}@media(max-width:700px){.acf-grid{grid-template-columns:1fr}}</style></head><body><main><nav><a href="index.html">Data browser</a> · <a href="syisr.html?source=own&date=2023-11-15">Lower-altitude LP fits</a> · <a href="syisr-hplus-refit.html">Profile-likelihood memo</a></nav><h1>SYISR full LP experiment</h1><p>14 November 2023 23:38 UTC – 16 November 2023 00:06 UTC · main-station monostatic beams · half-hour integrations.</p><p class="notice">Independent Rust fits: H⁺/He⁺/O⁺ mixture, Ti, Te and signed spectral velocity. Absolute electron density is not calibrated: the Ne field is unavailable, not the prescribed density used in the spectrum model. Near-perpendicular ranges outside the current model are withheld. Temperatures and composition in weak prescribed tails are nuisance values; enable “Hide rejected fits” to exclude them.</p><div class="controls"><label>Beam <select id="beam"></select></label><label><input type="checkbox" id="reject">Hide rejected fits</label><a href="data/syisr/full-v2/syisr-full-campaign.h5">Download HDF5</a></div><p id="status">Loading…</p><p id="selection">Select a parameter-map pixel to inspect its measured and fitted lag products.</p><section id="maps" class="parameter-stack"></section><section id="diagnostics"><h2>Measured and fitted lag products</h2><p id="quality"></p><div class="acf-grid"><div id="real"></div><div id="imag"></div></div></section><details><summary>Analysis and calibration</summary><p>All 63 files and 5,505,066 pulses were screened before averaging. Products use only voltage pairs with both samples retained. All 41 lags, from 0 to 400 µs, are used. Each lag retains its own range/receiver ambiguity in the forward model; these are not equal-ambiguity ACFs. Curves below show measured products at one receive sample, not an independent local ACF.</p><p>Continuous profile parameters have 150 km knot spacing with 25 km range quadrature. Electron response is magnetized using IGRF and each beam’s remote scattering geometry. The receiver response uses a short-lag tapered noise reference, with a residual background amplitude profiled. Error weights take the larger of propagated pulse SEM and between-dwell variability; full lag/range covariance and receiver-response uncertainty are not marginalized. He⁺ maps are conditional joint-fit point estimates, not independently established He⁺ detections. Shared ion temperature is assumed for H⁺, He⁺ and O⁺. The physical velocity sign needs independent validation. A prescribed Debye-shape density of 10¹¹ m⁻³ is not a measurement of Ne. Range-dependent power remains in ADU² until system calibration is supplied.</p><p>The maps use the common RUISDAP Rust/WASM/WebGL renderer and rustplotlib navigation and colour controls. Click a colour bar to adjust its limits. Select a pixel for diagnostics. The first and last half-hour cells contain partial coverage. No results are substituted from supplied SYISR L2.</p></details></main><script type="module" src="syisr-campaign.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>RUISDAP · Full SYISR LP experiment</title>
+    <link rel="stylesheet" href="style.css" />
+    <link rel="stylesheet" href="light.css" />
+    <style>
+      main {
+        max-width: 1700px;
+        margin: auto;
+        padding: 20px;
+      }
+      .controls {
+        position: sticky;
+        top: 0;
+        background: white;
+        z-index: 20;
+        display: flex;
+        gap: 20px;
+        align-items: center;
+        flex-wrap: wrap;
+        padding: 10px;
+      }
+      .ion-raster {
+        height: 220px;
+      }
+      .parameter-row {
+        margin: 0;
+      }
+      .scientific-map h3 {
+        display: none;
+      }
+      #selection {
+        height: 4em;
+        overflow: auto;
+        font-variant-numeric: tabular-nums;
+      }
+      .notice {
+        border-left: 3px solid #ae8c40;
+        padding: 12px;
+        background: #faf7ef;
+      }
+      select,
+      button {
+        font: inherit;
+      }
+      #diagnostics {
+        min-height: 240px;
+      }
+      .acf-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+      }
+      @media (max-width: 700px) {
+        .acf-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <nav>
+        <a href="index.html">Data browser</a> ·
+        <a href="syisr.html?source=own&date=2023-11-15"
+          >Lower-altitude LP fits</a
+        >
+        · <a href="syisr-hplus-refit.html">Profile-likelihood memo</a>
+      </nav>
+      <h1>SYISR full LP experiment</h1>
+      <p>
+        14 November 2023 23:38 UTC – 16 November 2023 00:06 UTC · main-station
+        monostatic beams · half-hour integrations.
+      </p>
+      <p class="notice">
+        Independent Rust fits: H⁺/He⁺/O⁺ mixture, Ti, Te and signed spectral
+        velocity. Absolute electron density is not calibrated: the Ne field is
+        unavailable, not the prescribed density used in the spectrum model.
+        Near-perpendicular ranges outside the current model are withheld.
+        Temperatures and composition in weak prescribed tails are nuisance
+        values; enable “Hide rejected fits” to exclude them.
+      </p>
+      <div class="controls">
+        <label
+          >Beam
+          <select id="beam"></select></label
+        ><label><input type="checkbox" id="reject" />Hide rejected fits</label
+        ><a href="data/syisr/full-v2/syisr-full-campaign.h5">Download HDF5</a>
+      </div>
+      <p id="status">Loading…</p>
+      <p id="selection">
+        Select a parameter-map pixel to inspect its measured and fitted lag
+        products.
+      </p>
+      <section id="maps" class="parameter-stack"></section>
+      <section id="diagnostics">
+        <h2>Measured and fitted lag products</h2>
+        <p id="quality"></p>
+        <div class="acf-grid">
+          <div id="real"></div>
+          <div id="imag"></div>
+        </div>
+      </section>
+      <details>
+        <summary>Analysis and calibration</summary>
+        <p>
+          All 63 files and 5,505,066 pulses were screened before averaging.
+          Products use only voltage pairs with both samples retained. All 41
+          lags, from 0 to 400 µs, are used. Each lag retains its own
+          range/receiver ambiguity in the forward model; these are not
+          equal-ambiguity ACFs. Curves below show measured products at one
+          receive sample, not an independent local ACF.
+        </p>
+        <p>
+          Continuous profile parameters have 150 km knot spacing with 25 km
+          range quadrature. Electron response is magnetized using IGRF and each
+          beam’s remote scattering geometry. The receiver response uses a
+          short-lag tapered noise reference, with a residual background
+          amplitude profiled. Error weights take the larger of propagated pulse
+          SEM and between-dwell variability; full lag/range covariance and
+          receiver-response uncertainty are not marginalized. He⁺ maps are
+          conditional joint-fit point estimates, not independently established
+          He⁺ detections. Shared ion temperature is assumed for H⁺, He⁺ and O⁺.
+          The physical velocity sign needs independent validation. A prescribed
+          Debye-shape density of 10¹¹ m⁻³ is not a measurement of Ne.
+          Range-dependent power remains in ADU² until system calibration is
+          supplied.
+        </p>
+        <p>
+          The maps use the common RUISDAP Rust/WASM/WebGL renderer and
+          rustplotlib navigation and colour controls. Click a colour bar to
+          adjust its limits. Select a pixel for diagnostics. The first and last
+          half-hour cells contain partial coverage. No results are substituted
+          from supplied SYISR L2.
+        </p>
+      </details>
+    </main>
+    <script type="module" src="syisr-campaign.js"></script>
+  </body>
+</html>
